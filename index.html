@@ -240,6 +240,8 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
     <dl class="facts" id="facts"></dl>
     <div id="fpsRow" class="row" hidden><span>Frame rate (not found in file)</span>
       <select id="fpsSel"><option value="24000/1001">23.976</option><option value="24">24</option><option value="25" selected>25</option><option value="30000/1001">29.97</option><option value="30">30</option><option value="50">50</option><option value="60000/1001">59.94</option><option value="60">60</option></select></div>
+    <div class="row"><span>Colour matrix</span>
+      <select id="matrixSel" aria-label="Colour matrix"><option value="auto">From file</option><option value="709">BT.709</option><option value="601">BT.601</option><option value="2020">BT.2020</option></select></div>
     <div class="row"><span>Video range</span>
       <select id="rangeSel" aria-label="Video range"><option value="auto">From file</option><option value="legal">Legal (16–235)</option><option value="full">Full (0–255)</option></select></div>
     <div><div class="bar"><button class="btn small" id="exportCheck">Check export colours</button></div><p class="hint" id="exportCheckOut">Sends known colours through the export and save path and reads them back.</p></div>
@@ -313,10 +315,13 @@ function scanBars(d, w, h) {
 
 const IDENT = new Uint8Array(4096).map((_, i) => Math.round(i * 255 / 4095));
 const rangeOf = (m, d) => m.range === 'full' ? 1 : m.range === 'legal' ? 0 : (d.range === 2 ? 1 : 0);
-const matrixOf = cs => (cs === 5 || cs === 6) ? 1 : (cs === 9 || cs === 10) ? 2 : 0;
+const matrixAuto = cs => (cs === 5 || cs === 6) ? 1 : (cs === 9 || cs === 10) ? 2 : 0;
+let matrixMode = 'auto';
+const matrixOf = cs => matrixMode === '709' ? 0 : matrixMode === '601' ? 1 : matrixMode === '2020' ? 2 : matrixAuto(cs);
 function decodeAt(idx) { if (idx === lastIdx) return core.lastInfo; const d = core.decode(idx); if (d.error) throw new Error('decode failed (' + d.error + ') at frame ' + idx); lastIdx = idx; core.lastInfo = d; return d; }
 onmessage = e => {
   const m = e.data;
+  if (m.matrix) matrixMode = m.matrix;
   try {
     if (m.type === 'init') { mod = m.module; postMessage({ id: m.id, ok: true }); return; }
     if (m.type === 'open') {
@@ -458,6 +463,7 @@ const state = {
   rendered: [],
   decoder: { status: 'starting' },
   rangeMode: 'auto',
+  matrixMode: 'auto',
   driver: 'wasm',  // 'wasm' = built-in ProRes decoder, 'safari' = Safari's hardware decoder (H.264/HEVC)
   cal: null,       // Safari decode check {status, lut:Float32Array|null, maxErr, colourErr}
 };
@@ -503,12 +509,12 @@ function pumpWorker() {
   if (!job) return;
   busy = true;
   const id = nextId++; job.msg.id = id; pending.set(id, job);
-  const viaSafari = (state.driver === 'safari' && (job.msg.type === 'frame' || job.msg.type === 'detect')) || (state.driver === 'hybrid' && job.msg.type === 'frame' && !job.msg.exact);
+  const viaSafari = (state.driver === 'safari' && (job.msg.type === 'frame' || job.msg.type === 'detect')) || (state.driver === 'hybrid' && job.msg.type === 'frame' && !job.msg.exact && state.matrixMode === 'auto' && state.rangeMode === 'auto');
   if (viaSafari) {
     (job.msg.type === 'detect' ? safariDetect : safariFrame)(job.msg).then(m => onWorkerMsg({ data: { ...m, id } }), e => onWorkerMsg({ data: { id, error: String(e && e.message || e) } }));
   } else {
     job.timer = setTimeout(() => recover('a frame took too long to decode'), LIMITS[job.msg.exact ? 'exact' : job.msg.type] || 12000);
-    job.msg.range = state.rangeMode;
+    job.msg.range = state.rangeMode; job.msg.matrix = state.matrixMode;
     worker.postMessage(job.msg);
   }
 }
@@ -978,6 +984,7 @@ function renderChips() {
     const m = s.meta, codec = m && m.codec;
     add(CODECS[codec] || codec || (state.driver === 'safari' ? 'Video' : 'ProRes'));
     if (state.driver === 'safari') add('Safari decode', 'warn');
+    if (state.matrixMode !== 'auto' || state.rangeMode !== 'auto') add('Override on', 'warn');
     if (state.driver === 'hybrid') add(state.cal && state.cal.status === 'done' ? 'Preview via Safari' : 'Preview colour approximate', state.cal && state.cal.status === 'done' ? '' : 'warn');
     add(`${s.w}×${s.h}`);
     add(`${+s.fps.toFixed(3)}${s.fpsKnown ? '' : '?'} fps`, s.fpsKnown ? '' : 'warn');
@@ -1029,6 +1036,7 @@ function renderFacts() {
       : 'Built-in decoder, full bit depth'],
     ['Frame rate', `${s.num}/${s.den} = ${+s.fps.toFixed(3)} fps${s.fpsKnown ? '' : ' (assumed)'}`], ['Frames', s.frames],
     ['Start TC', s.hasTC ? tcOf(0) : 'none in file (counting from 00:00:00:00)'],
+    ['Matrix used', state.matrixMode === 'auto' ? 'from file' : 'overridden: BT.' + state.matrixMode],
     ['Range flag', s.decRange == null ? '\u2013' : ({ 0: 'unspecified (legal assumed)', 1: 'legal', 2: 'full' }[s.decRange] || s.decRange) + (state.rangeMode !== 'auto' ? ' \u00b7 overridden: ' + state.rangeMode : '')],
     ['Colour tags', `${i.primaries}-${i.trc}-${i.matrix} · ${PRIM[i.primaries] || '?'} / ${TRC[i.trc] || '?'} / ${MAT[i.matrix] || '?'}`],
   ];
@@ -1098,8 +1106,9 @@ $('exBack').onclick = () => { $('exOptions').hidden = false; $('exRun').hidden =
 $('renderBtn').onclick = renderStills;
 $('saveAll').onclick = saveAll;
 $('infoBtn').onclick = () => { renderFacts(); renderDecoder(); $('infoSheet').hidden = false; };
-$('rangeSel').onchange = e => { state.rangeMode = e.target.value; lutCache; thumbQ = []; viewDirty = true; pumpWorker(); buildStrip(); detectBars(); renderFacts(); };
+$('rangeSel').onchange = e => { state.rangeMode = e.target.value; renderChips(); thumbQ = []; viewDirty = true; pumpWorker(); buildStrip(); detectBars(); renderFacts(); };
 $('exportCheck').onclick = exportCheck;
+$('matrixSel').onchange = e => { state.matrixMode = e.target.value; thumbQ = []; viewDirty = true; pumpWorker(); buildStrip(); renderFacts(); renderChips(); };
 $('infoClose').onclick = () => $('infoSheet').hidden = true;
 $('fpsSel').onchange = () => { const s = state.src; if (s && !s.fpsKnown) { const [n, d] = $('fpsSel').value.split('/').map(Number); Object.assign(s, { num: n, den: d || 1, fps: n / (d || 1), tcBase: Math.round(n / (d || 1)) }); renderAll(); renderFacts(); } };
 [$('exportSheet'), $('infoSheet')].forEach(s => s.addEventListener('click', e => { if (e.target === s) s.hidden = true; }));
