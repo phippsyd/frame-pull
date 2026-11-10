@@ -201,8 +201,8 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
       <div>
         <h3>Tone</h3>
         <div class="seg" id="segTone">
-          <button data-v="grade" aria-pressed="true">Match grade</button>
-          <button data-v="codes" aria-pressed="false">Code values</button>
+          <button data-v="codes" aria-pressed="true">Code values</button>
+          <button data-v="grade" aria-pressed="false">2.4 → 2.2</button>
           <button data-v="iphone" aria-pressed="false">iPhone look</button>
         </div>
         <p class="hint" id="toneHint"></p>
@@ -450,14 +450,14 @@ const state = {
   cur: 0, shown: -1,
   marks: [],      // {f, thumb}
   crop: null,
-  opts: { tone: 'grade', crop: true, fmt: 'jpg' },
+  opts: { tone: 'codes', crop: true, fmt: 'jpg' },
   rendered: [],
   decoder: { status: 'starting' },
   driver: 'wasm',  // 'wasm' = built-in ProRes decoder, 'safari' = Safari's hardware decoder (H.264/HEVC)
   cal: null,       // Safari decode check {status, lut:Float32Array|null, maxErr, colourErr}
 };
-try { const o = JSON.parse(localStorage.getItem('framepull.opts') || 'null'); if (o) Object.assign(state.opts, o); } catch (e) {}
-const saveOpts = () => { try { localStorage.setItem('framepull.opts', JSON.stringify(state.opts)); } catch (e) {} };
+try { const o = JSON.parse(localStorage.getItem('framepull.opts2') || 'null'); if (o) Object.assign(state.opts, o); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem('framepull.opts2', JSON.stringify(state.opts)); } catch (e) {} };
 
 const CODECS = { apco: 'ProRes 422 Proxy', apcs: 'ProRes 422 LT', apcn: 'ProRes 422', apch: 'ProRes 422 HQ', ap4h: 'ProRes 4444', ap4x: 'ProRes 4444 XQ', aprn: 'ProRes RAW', aprh: 'ProRes RAW HQ', avc1: 'H.264', hvc1: 'HEVC', hev1: 'HEVC' };
 const PRIM = { 1: 'Rec.709', 5: 'PAL', 6: 'SMPTE-C', 9: 'Rec.2020', 11: 'DCI-P3', 12: 'P3-D65' };
@@ -467,8 +467,8 @@ const MAT = { 1: 'BT.709', 5: 'BT.601', 6: 'BT.601', 9: 'BT.2020' };
 /* ---------- tone (applied to 12-bit RGB code values in the decoder) ---------- */
 const srgbEncode = L => L <= 0.0031308 ? 12.92 * L : 1.055 * Math.pow(L, 1 / 2.4) - 0.055;
 const TONES = {
-  grade: { f: v => srgbEncode(Math.pow(v, 2.4)), label: 'Match grade', hint: 'Converts BT.1886 (gamma 2.4) to sRGB, so shadows sit where they did in the grade.' },
-  codes: { f: v => v, label: 'Code values', hint: 'Passes the Rec.709 code values straight through, tagged sRGB. Shadows look slightly lighter than the grade.' },
+  codes: { f: v => v, label: 'Code values', hint: 'Recommended. Keeps the Rec.709 code values and tags them sRGB, the usual way a graded frame goes to the web. The phone\u2019s brighter viewing conditions do the surround compensation.' },
+  grade: { f: v => Math.pow(v, 2.4 / 2.2), label: '2.4 \u2192 2.2', hint: 'Converts gamma 2.4 to a pure 2.2 power (no sRGB toe), for slightly richer shadows than code values.' },
   iphone: { f: v => srgbEncode(Math.pow(v, 1.961)), label: 'iPhone look', hint: 'Matches how iOS plays Rec.709 video (about gamma 1.96). Shadows look lighter still.' },
 };
 const lutCache = {};
