@@ -240,6 +240,9 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
     <dl class="facts" id="facts"></dl>
     <div id="fpsRow" class="row" hidden><span>Frame rate (not found in file)</span>
       <select id="fpsSel"><option value="24000/1001">23.976</option><option value="24">24</option><option value="25" selected>25</option><option value="30000/1001">29.97</option><option value="30">30</option><option value="50">50</option><option value="60000/1001">59.94</option><option value="60">60</option></select></div>
+    <div class="row"><span>Video range</span>
+      <select id="rangeSel" aria-label="Video range"><option value="auto">From file</option><option value="legal">Legal (16–235)</option><option value="full">Full (0–255)</option></select></div>
+    <div><div class="bar"><button class="btn small" id="exportCheck">Check export colours</button></div><p class="hint" id="exportCheckOut">Sends known colours through the export and save path and reads them back.</p></div>
     <p class="hint" id="pickHint">Open masters from <b>Files</b> (Choose File). Picking from the Photos library lets iOS convert the clip to H.264 or HEVC before this page sees it.</p>
     <div>
       <h3>Decoder</h3>
@@ -309,6 +312,7 @@ function scanBars(d, w, h) {
 }
 
 const IDENT = new Uint8Array(4096).map((_, i) => Math.round(i * 255 / 4095));
+const rangeOf = (m, d) => m.range === 'full' ? 1 : m.range === 'legal' ? 0 : (d.range === 2 ? 1 : 0);
 const matrixOf = cs => (cs === 5 || cs === 6) ? 1 : (cs === 9 || cs === 10) ? 2 : 0;
 function decodeAt(idx) { if (idx === lastIdx) return core.lastInfo; const d = core.decode(idx); if (d.error) throw new Error('decode failed (' + d.error + ') at frame ' + idx); lastIdx = idx; core.lastInfo = d; return d; }
 onmessage = e => {
@@ -324,7 +328,7 @@ onmessage = e => {
     }
     if (m.type === 'frame') {
       const d = decodeAt(m.idx);
-      const r = core.render(m.x, m.y, m.w, m.h, m.step, matrixOf(d.colorspace), d.range === 2 ? 1 : 0, m.lut);
+      const r = core.render(m.x, m.y, m.w, m.h, m.step, matrixOf(d.colorspace), rangeOf(m, d), m.lut);
       if (m.step === 1) core.trim();
       postMessage({ id: m.id, idx: m.idx, w: r.w, h: r.h, data: r.data, dec: d }, [r.data.buffer]); return;
     }
@@ -332,7 +336,7 @@ onmessage = e => {
       let acc = null;
       for (const idx of m.idxs) {
         const d = decodeAt(idx);
-        const r = core.render(0, 0, d.width, d.height, 1, matrixOf(d.colorspace), d.range === 2 ? 1 : 0, IDENT);
+        const r = core.render(0, 0, d.width, d.height, 1, matrixOf(d.colorspace), rangeOf(m, d), IDENT);
         core.trim();
         const b = scanBars(r.data, r.w, r.h);
         if (b) acc = acc ? { top: Math.min(acc.top, b.top), bottom: Math.min(acc.bottom, b.bottom), left: Math.min(acc.left, b.left), right: Math.min(acc.right, b.right) } : b;
@@ -453,6 +457,7 @@ const state = {
   opts: { tone: 'codes', crop: true, fmt: 'jpg' },
   rendered: [],
   decoder: { status: 'starting' },
+  rangeMode: 'auto',
   driver: 'wasm',  // 'wasm' = built-in ProRes decoder, 'safari' = Safari's hardware decoder (H.264/HEVC)
   cal: null,       // Safari decode check {status, lut:Float32Array|null, maxErr, colourErr}
 };
@@ -503,6 +508,7 @@ function pumpWorker() {
     (job.msg.type === 'detect' ? safariDetect : safariFrame)(job.msg).then(m => onWorkerMsg({ data: { ...m, id } }), e => onWorkerMsg({ data: { id, error: String(e && e.message || e) } }));
   } else {
     job.timer = setTimeout(() => recover('a frame took too long to decode'), LIMITS[job.msg.exact ? 'exact' : job.msg.type] || 12000);
+    job.msg.range = state.rangeMode;
     worker.postMessage(job.msg);
   }
 }
@@ -580,7 +586,7 @@ function showFrame(r, s) {
   if (state.src !== s) return;
   if (view.width !== r.w || view.height !== r.h) { view.width = r.w; view.height = r.h; }
   vctx.putImageData(new ImageData(r.data, r.w, r.h), 0, 0);
-  state.shown = r.idx; layoutView();
+  state.shown = r.idx; if (r.dec) s.decRange = r.dec.range; layoutView();
   const ready = thumbWaiters.filter(w => w.f === r.idx); thumbWaiters = thumbWaiters.filter(w => w.f !== r.idx);
   ready.forEach(w => w.done());
   if (!$('exportSheet').hidden) drawPreview();
@@ -781,6 +787,62 @@ async function runSafariCheck() {
   if (state.src && state.driver !== 'wasm') { viewDirty = true; pumpWorker(); buildStrip(); }
 }
 
+/* ---------- explicit sRGB tagging of exported files ---------- */
+const SRGB_ICC = Uint8Array.from(atob("AAACTGxjbXMEQAAAbW50clJHQiBYWVogB+oACwAKAA4AEgA3YWNzcEFQUEwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPbWAAEAAAAA0y1sY21zAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALZGVzYwAAAQgAAAA2Y3BydAAAAUAAAABMd3RwdAAAAYwAAAAUY2hhZAAAAaAAAAAsclhZWgAAAcwAAAAUYlhZWgAAAeAAAAAUZ1hZWgAAAfQAAAAUclRSQwAAAggAAAAgZ1RSQwAAAggAAAAgYlRSQwAAAggAAAAgY2hybQAAAigAAAAkbWx1YwAAAAAAAAABAAAADGVuVVMAAAAaAAAAHABzAFIARwBCACAAYgB1AGkAbAB0AC0AaQBuAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAADAAAAAcAE4AbwAgAGMAbwBwAHkAcgBpAGcAaAB0ACwAIAB1AHMAZQAgAGYAcgBlAGUAbAB5WFlaIAAAAAAAAPbWAAEAAAAA0y1zZjMyAAAAAAABDEIAAAXe///zJQAAB5MAAP2Q///7of///aIAAAPcAADAblhZWiAAAAAAAABvoAAAOPUAAAOQWFlaIAAAAAAAACSfAAAPhAAAtsNYWVogAAAAAAAAYpcAALeHAAAY2XBhcmEAAAAAAAMAAAACZmYAAPKnAAANWQAAE9AAAApbY2hybQAAAAAAAwAAAACj1wAAVHsAAEzNAACZmgAAJmYAAA9c"), c => c.charCodeAt(0));
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = (b, s, e) => { let c = 0xffffffff; for (let i = s; i < e; i++) c = CRC_T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+async function tagSRGB(blob, ext) {
+  const b = new Uint8Array(await blob.arrayBuffer()), parts = [];
+  if (ext === 'png') {
+    // keep the signature and IHDR, drop any iCCP/sRGB/gAMA/cHRM, add sRGB (perceptual) right after IHDR
+    let o = 8; parts.push(b.subarray(0, 8));
+    while (o < b.length) {
+      const len = ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0, type = String.fromCharCode(b[o + 4], b[o + 5], b[o + 6], b[o + 7]), end = o + 12 + len;
+      if (!['iCCP', 'sRGB', 'gAMA', 'cHRM'].includes(type)) parts.push(b.subarray(o, end));
+      if (type === 'IHDR') { const c = new Uint8Array(13); c.set([0, 0, 0, 1, 0x73, 0x52, 0x47, 0x42, 0]); const crc = crc32(c, 4, 9); c.set([crc >>> 24, (crc >>> 16) & 255, (crc >>> 8) & 255, crc & 255], 9); parts.push(c); }
+      o = end;
+    }
+    return new Blob(parts, { type: 'image/png' });
+  }
+  // JPEG: drop existing ICC APP2 segments, insert an sRGB ICC_PROFILE right after SOI
+  const sig = [73, 67, 67, 95, 80, 82, 79, 70, 73, 76, 69, 0];
+  const app2 = new Uint8Array(4 + 14 + SRGB_ICC.length), L = 2 + 14 + SRGB_ICC.length;
+  app2.set([0xff, 0xe2, L >> 8, L & 255, ...sig, 1, 1]); app2.set(SRGB_ICC, 18);
+  parts.push(b.subarray(0, 2), app2);
+  let o = 2;
+  while (o + 4 <= b.length && b[o] === 0xff && b[o + 1] !== 0xda) {
+    const len = (b[o + 2] << 8) | b[o + 3], end = o + 2 + len;
+    const isIcc = b[o + 1] === 0xe2 && sig.every((v, i) => b[o + 4 + i] === v);
+    if (!isIcc) parts.push(b.subarray(o, end));
+    o = end;
+  }
+  parts.push(b.subarray(o));
+  return new Blob(parts, { type: 'image/jpeg' });
+}
+// Push known values through the exact export path (canvas -> encoder -> tag -> decode) and read them back.
+async function exportCheck() {
+  const out = $('exportCheckOut'); out.textContent = 'Checking…';
+  const greys = [0, 16, 32, 64, 96, 128, 160, 192, 224, 255], cols = [[191, 0, 0], [0, 191, 0], [0, 0, 191], [191, 191, 0], [200, 150, 110]];
+  const vals = [...greys.map(g => [g, g, g]), ...cols], W = 64 * vals.length, H = 64;
+  const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d', { colorSpace: 'srgb' }), img = ctx.createImageData(W, H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = vals[x >> 6], i = (y * W + x) * 4; img.data[i] = v[0]; img.data[i + 1] = v[1]; img.data[i + 2] = v[2]; img.data[i + 3] = 255; }
+  ctx.putImageData(img, 0, 0);
+  const res = [];
+  for (const [ext, type] of [['jpg', 'image/jpeg'], ['png', 'image/png']]) {
+    try {
+      const raw = await new Promise(r => cv.toBlob(r, type, 1.0)), tagged = await tagSRGB(raw, ext);
+      const bmp = await createImageBitmap(tagged);
+      const rc = document.createElement('canvas'); rc.width = W; rc.height = H;
+      const rx = rc.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true }); rx.drawImage(bmp, 0, 0);
+      let worst = 0, at = '';
+      vals.forEach((v, k) => { const d = rx.getImageData(k * 64 + 32, 32, 1, 1).data; const e = Math.max(...[0, 1, 2].map(c => Math.abs(d[c] - v[c]))); if (e > worst) { worst = e; at = v.join(',') + '→' + [d[0], d[1], d[2]].join(','); } });
+      res.push(`${ext.toUpperCase()} max error ${worst}${worst > 2 ? ' (' + at + ')' : ''}`);
+    } catch (e) { res.push(`${ext.toUpperCase()} check failed: ${e.message}`); }
+  }
+  out.textContent = res.join(' · ') + ` · range ${state.rangeMode}${state.src && state.src.decRange != null ? ' (file flag ' + ({ 0: 'unspecified', 1: 'legal', 2: 'full' }[state.src.decRange] || state.src.decRange) + ')' : ''}`;
+}
+
 /* ---------- marking ---------- */
 function thumbFromView() {
   const cv = document.createElement('canvas'), w = 192; cv.width = w; cv.height = Math.round(w * 9 / 16);
@@ -826,6 +888,7 @@ async function renderStills() {
       const cv = document.createElement('canvas'); cv.width = m.w; cv.height = m.h;
       cv.getContext('2d', { colorSpace: 'srgb' }).putImageData(new ImageData(m.data, m.w, m.h), 0, 0);
       blob = await new Promise(res => cv.toBlob(res, type, 1.0));
+      if (blob) blob = await tagSRGB(blob, ext);
       cv.width = cv.height = 0;
     } catch (e) { setStatus('Rendering failed at ' + tcOf(marks[k].f) + ': ' + e.message, true); break; }
     if (!blob) { setStatus('Rendering failed at ' + tcOf(marks[k].f) + '. Safari may be short of memory; try fewer stills at once.', true); break; }
@@ -966,6 +1029,7 @@ function renderFacts() {
       : 'Built-in decoder, full bit depth'],
     ['Frame rate', `${s.num}/${s.den} = ${+s.fps.toFixed(3)} fps${s.fpsKnown ? '' : ' (assumed)'}`], ['Frames', s.frames],
     ['Start TC', s.hasTC ? tcOf(0) : 'none in file (counting from 00:00:00:00)'],
+    ['Range flag', s.decRange == null ? '\u2013' : ({ 0: 'unspecified (legal assumed)', 1: 'legal', 2: 'full' }[s.decRange] || s.decRange) + (state.rangeMode !== 'auto' ? ' \u00b7 overridden: ' + state.rangeMode : '')],
     ['Colour tags', `${i.primaries}-${i.trc}-${i.matrix} · ${PRIM[i.primaries] || '?'} / ${TRC[i.trc] || '?'} / ${MAT[i.matrix] || '?'}`],
   ];
   if (i.trc === 16 || i.trc === 18) rows.push(['Note', 'HDR transfer. This tool is built for SDR Rec.709; HDR stills will not be tone-correct.']);
@@ -1034,6 +1098,8 @@ $('exBack').onclick = () => { $('exOptions').hidden = false; $('exRun').hidden =
 $('renderBtn').onclick = renderStills;
 $('saveAll').onclick = saveAll;
 $('infoBtn').onclick = () => { renderFacts(); renderDecoder(); $('infoSheet').hidden = false; };
+$('rangeSel').onchange = e => { state.rangeMode = e.target.value; lutCache; thumbQ = []; viewDirty = true; pumpWorker(); buildStrip(); detectBars(); renderFacts(); };
+$('exportCheck').onclick = exportCheck;
 $('infoClose').onclick = () => $('infoSheet').hidden = true;
 $('fpsSel').onchange = () => { const s = state.src; if (s && !s.fpsKnown) { const [n, d] = $('fpsSel').value.split('/').map(Number); Object.assign(s, { num: n, den: d || 1, fps: n / (d || 1), tcBase: Math.round(n / (d || 1)) }); renderAll(); renderFacts(); } };
 [$('exportSheet'), $('infoSheet')].forEach(s => s.addEventListener('click', e => { if (e.target === s) s.hidden = true; }));
