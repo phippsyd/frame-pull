@@ -116,7 +116,6 @@ header { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .key:disabled { opacity: .4; }
 
 .tray { display: flex; gap: 10px; overflow-x: auto; min-height: 96px; align-items: flex-start; padding-bottom: 2px; scrollbar-width: thin; }
-.tray .none { color: var(--dim); font-size: 13px; align-self: center; }
 .still { flex: none; position: relative; width: 148px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); background: var(--panel); cursor: pointer; padding: 0; text-align: left; }
 .still.cur { border-color: var(--accent); }
 .still img { display: block; width: 100%; height: auto; min-height: 60px; background: #000; }
@@ -219,7 +218,7 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
       <button class="key mark" id="markBtn">Mark still</button>
       <button class="key" id="next" aria-label="Forward one frame">1f ›</button>
     </div>
-    <div class="tray" id="tray"><div class="none">Marked stills appear here.</div></div>
+    <div class="tray" id="tray" hidden></div>
     <div class="bar">
       <button class="btn primary" id="exportBtn" disabled>Export stills</button>
     </div>
@@ -273,6 +272,10 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
     <div class="row">
       <div><h3 style="margin:0">Preview as grading monitor</h3><p class="hint" style="margin-top:4px">For checking against the reference in a dark suite, where the same grade looks darker than on a phone. Only changes the preview; stills always export for phones.</p></div>
       <label class="switch"><input type="checkbox" id="lookMonitor" aria-label="Preview as grading monitor"><span></span></label>
+    </div>
+    <div class="row">
+      <div><h3 style="margin:0">Jog wheel click</h3><p class="hint" style="margin-top:4px">A soft tick for each frame on the jog wheel. Follows the ring/silent switch.</p></div>
+      <label class="switch"><input type="checkbox" id="clickToggle" aria-label="Jog wheel click sound"><span></span></label>
     </div>
     <div class="row"><span>Colour matrix</span>
       <select id="matrixSel" aria-label="Colour matrix"><option value="auto">From file</option><option value="709">BT.709</option><option value="601">BT.601</option><option value="2020">BT.2020</option></select></div>
@@ -549,7 +552,7 @@ const state = {
   cur: 0, shown: -1,
   marks: [],      // {f, thumb}
   crop: null,
-  opts: { crop: true, fmt: 'jpg', suite: false },
+  opts: { crop: true, fmt: 'jpg', suite: false, click: true },
   rendered: [],
   decoder: { status: 'starting' },
   rangeMode: 'auto',
@@ -1164,7 +1167,7 @@ function renderReadout() {
 }
 function renderMarks() {
   const t = $('tray'), s = state.src; t.innerHTML = '';
-  if (!state.marks.length) t.innerHTML = '<div class="none">Marked stills appear here.</div>';
+  t.hidden = !state.marks.length;
   for (const m of state.marks) {
     const b = document.createElement('button'); b.className = 'still' + (m.f === state.cur ? ' cur' : ''); b.dataset.f = m.f; b.setAttribute('aria-label', 'Go to ' + tcOf(m.f));
     b.innerHTML = '<img alt=""><span></span>'; if (m.thumb) b.querySelector('img').src = m.thumb; b.querySelector('span').textContent = tcOf(m.f);
@@ -1265,19 +1268,45 @@ $('markBtn').onclick = toggleMark;
   el.addEventListener('pointermove', e => { if (down) at(e); });
   el.addEventListener('pointerup', () => down = false); el.addEventListener('pointercancel', () => down = false);
 })();
-// A light tick per frame on the jog wheel. Android: vibrate(). iPhone (iOS 18+): toggling a hidden switch fires the system haptic.
-const haptic = (() => {
-  let lab = null, last = 0;
-  if (!navigator.vibrate) {
-    lab = document.createElement('label'); lab.setAttribute('aria-hidden', 'true');
-    lab.style.cssText = 'position:fixed;left:-200px;top:0;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none';
-    const i = document.createElement('input'); i.type = 'checkbox'; i.setAttribute('switch', ''); i.tabIndex = -1; lab.append(i); document.body.append(lab);
+// A tick per frame on the jog wheel.
+// Haptic: Android vibrate(); on iPhone, clicking a hidden <input switch> fires the system haptic (iOS 18+, the method
+// open-source iOS haptics libraries use). Sound: a 4 ms filtered click via Web Audio, 'ambient' so the silent switch mutes it.
+const ticker = (() => {
+  let ctx = null, buf = null, last = 0, want = false;
+  function hapticNow() {
+    try {
+      if (navigator.vibrate) { navigator.vibrate(5); return; }
+      const lab = document.createElement('label'), inp = document.createElement('input');
+      lab.setAttribute('aria-hidden', 'true'); lab.style.display = 'none'; inp.type = 'checkbox'; inp.setAttribute('switch', '');
+      lab.append(inp); document.head.append(lab); lab.click(); lab.remove();
+    } catch (e) {}
   }
-  return () => { const t = performance.now(); if (t - last < 35) return; last = t; try { if (navigator.vibrate) navigator.vibrate(5); else lab.click(); } catch (e) {} };
+  function soundNow() {
+    if (!state.opts.click || !ctx) return;
+    try {
+      if (ctx.state === 'suspended') ctx.resume();
+      const src = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+      src.buffer = buf; f.type = 'bandpass'; f.frequency.value = 3200; f.Q.value = 1.2; g.gain.value = 0.35;
+      src.connect(f).connect(g).connect(ctx.destination); src.start();
+    } catch (e) {}
+  }
+  return {
+    arm() {                                            // call from pointerdown (a user gesture), so audio may start
+      if (ctx || !state.opts.click) return;
+      try {
+        if (navigator.audioSession) navigator.audioSession.type = 'ambient';
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const n = Math.round(ctx.sampleRate * 0.004); buf = ctx.createBuffer(1, n, ctx.sampleRate);
+        const d = buf.getChannelData(0); for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3);
+      } catch (e) { ctx = null; }
+    },
+    tick() { const t = performance.now(); if (t - last < 35) return; last = t; soundNow(); want = true; if (!('ontouchstart' in window)) this.flush(); },
+    flush() { if (want) { want = false; hapticNow(); } },   // touch handlers count as user-initiated on iOS; pointermove may not
+  };
 })();
 function jogOn(el, ribs) {
   let down = false, lastX = 0, lastT = 0, acc = 0, off = 0;
-  el.addEventListener('pointerdown', e => { if (!state.src) return; down = true; lastX = e.clientX; lastT = e.timeStamp; acc = 0; el.setPointerCapture(e.pointerId); $('jog').classList.add('active'); });
+  el.addEventListener('pointerdown', e => { if (!state.src) return; ticker.arm(); down = true; lastX = e.clientX; lastT = e.timeStamp; acc = 0; el.setPointerCapture(e.pointerId); $('jog').classList.add('active'); });
   el.addEventListener('pointermove', e => {
     if (!down) return;
     const dx = e.clientX - lastX, dt = Math.max(1, e.timeStamp - lastT), v = Math.abs(dx) / dt;
@@ -1285,13 +1314,17 @@ function jogOn(el, ribs) {
     const gain = v > 1.2 ? 1 + (v - 1.2) * 4 : 1;
     acc += dx * gain / 10;
     const step = acc > 0 ? Math.floor(acc) : Math.ceil(acc);
-    if (step) { acc -= step; const before = state.cur; goTo(state.cur + step); if (state.cur !== before) haptic(); }
+    if (step) { acc -= step; const before = state.cur; goTo(state.cur + step); if (state.cur !== before) ticker.tick(); }
     off += dx; if (ribs) ribs.style.backgroundPosition = off + 'px 0';
   });
   const up = () => { down = false; $('jog').classList.remove('active'); };
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
 }
 jogOn($('jog'), $('ribs'));
+$('jog').addEventListener('touchmove', () => ticker.flush(), { passive: true });
+$('jog').addEventListener('touchend', () => ticker.flush(), { passive: true });
+$('clickToggle').checked = state.opts.click;
+$('clickToggle').onchange = e => { state.opts.click = e.target.checked; saveOpts(); };
 stageGestures();
 document.addEventListener('keydown', e => {
   if (!state.src || !$('exportSheet').hidden || !$('infoSheet').hidden || e.target.tagName === 'SELECT') return;
