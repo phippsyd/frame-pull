@@ -174,7 +174,7 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
     <button class="iconbtn" id="openBtn" aria-label="Open a master">
       <svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/><path d="M12 12v5M9.5 14.5 12 12l2.5 2.5"/></svg>
     </button>
-    <button class="iconbtn" id="infoBtn" aria-label="Source and calibration details">
+    <button class="iconbtn" id="infoBtn" aria-label="Source and settings">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
     </button>
     <input type="file" id="file" accept="video/quicktime,video/mp4,.mov,.mp4,.m4v">
@@ -191,15 +191,8 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
   <div class="transport">
     <div class="readout">
       <div class="tcwrap"><div class="tc" id="tc">--:--:--:--</div><div class="fr" id="fr">frame – / –</div></div>
-      <div class="look" role="group" aria-label="Preview look">
-        <span class="looklbl">Preview as</span>
-        <div class="lookseg">
-          <button id="lookPhone" aria-pressed="true">Phone</button>
-          <button id="lookMonitor" aria-pressed="false">Grading monitor</button>
-        </div>
-      </div>
+
     </div>
-    <p class="lookwhy">A grading monitor in a dark room shows the same grade darker than a phone in normal light. Use <b>Grading monitor</b> to compare with the suite; stills always export for phones.</p>
     <div class="strip" id="strip"><canvas id="stripCv"></canvas><div class="ticks" id="ticks"></div><div class="head"><i id="head"></i></div></div>
     <div class="jog" id="jog"><div class="ribs" id="ribs"></div><div class="lbl">Drag to jog · frame by frame</div></div>
     <div class="keys">
@@ -253,10 +246,14 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
 
 <div class="scrim" id="infoSheet" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="infoTitle">
-    <h2><span id="infoTitle">Source</span><button class="btn small" id="infoClose">Close</button></h2>
+    <h2><span id="infoTitle">Source &amp; settings</span><button class="btn small" id="infoClose">Close</button></h2>
     <dl class="facts" id="facts"></dl>
     <div id="fpsRow" class="row" hidden><span>Frame rate (not found in file)</span>
       <select id="fpsSel"><option value="24000/1001">23.976</option><option value="24">24</option><option value="25" selected>25</option><option value="30000/1001">29.97</option><option value="30">30</option><option value="50">50</option><option value="60000/1001">59.94</option><option value="60">60</option></select></div>
+    <div class="row">
+      <div><h3 style="margin:0">Preview as grading monitor</h3><p class="hint" style="margin-top:4px">For checking against the reference in a dark suite, where the same grade looks darker than on a phone. Only changes the preview; stills always export for phones.</p></div>
+      <label class="switch"><input type="checkbox" id="lookMonitor" aria-label="Preview as grading monitor"><span></span></label>
+    </div>
     <div class="row"><span>Colour matrix</span>
       <select id="matrixSel" aria-label="Colour matrix"><option value="auto">From file</option><option value="709">BT.709</option><option value="601">BT.601</option><option value="2020">BT.2020</option></select></div>
     <div class="row"><span>Video range</span>
@@ -1115,15 +1112,12 @@ function segBind(id, key, after) {
   sync();
 }
 segBind('segFmt', 'fmt');
-function syncSuite() { $('lookPhone').setAttribute('aria-pressed', String(!state.opts.suite)); $('lookMonitor').setAttribute('aria-pressed', String(state.opts.suite)); $('suiteNote').hidden = !state.opts.suite; }
+function syncSuite() { $('lookMonitor').checked = !!state.opts.suite; $('suiteNote').hidden = !state.opts.suite; }
 function setLook(monitor) {
   if (state.opts.suite === monitor) return;
   state.opts.suite = monitor; saveOpts(); syncSuite(); renderChips(); thumbQ = []; viewDirty = true; pumpWorker(); buildStrip();
-  toast(monitor ? 'Showing the frame as it looked on the grading monitor in a dark room: darker shadows. Only the preview changes; stills still export with the phone look.'
-                : 'Showing the frame as it will look on phones and Instagram, which is how stills export.');
 }
-$('lookPhone').onclick = () => setLook(false);
-$('lookMonitor').onclick = () => setLook(true);
+$('lookMonitor').onchange = e => setLook(e.target.checked);
 syncSuite();
 $('cropToggle').checked = state.opts.crop;
 $('cropToggle').onchange = e => { state.opts.crop = e.target.checked; saveOpts(); renderGuides(); layoutView(); viewDirty = true; pumpWorker(); drawPreview(); };
