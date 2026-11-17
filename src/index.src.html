@@ -1,0 +1,1128 @@
+<!doctype html>
+<html lang="en-GB"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Frame Pull</title>
+<meta name="description" content="Pull exact stills from ProRes, H.264 and HEVC masters on iPhone.">
+<meta name="theme-color" content="#161616">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Frame Pull">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}body{margin:0;font:14px system-ui,-apple-system,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+</head><body>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+/* Layout: one-screen viewer. Picture on top, transport (timecode, filmstrip, jog, mark) beneath, marked stills tray and export bar at the bottom.
+   Single dark theme by choice: the surround is a hue-free neutral grey, like a grading suite, so it doesn't bias how the frame reads. */
+:root {
+  --bg: #161616;          /* neutral surround */
+  --panel: #202020;
+  --raise: #2b2b2b;
+  --line: #3a3a3a;
+  --fg: #e8e8e8;
+  --dim: #9a9a9a;
+  --accent: #e0b14a;      /* marker amber: marks, playhead, primary action */
+  --accent-ink: #1a1404;
+  --warn: #e58a5a;
+  --ok: #8cc98a;
+  --font-body: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --r: 10px;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+* { box-sizing: border-box; }
+button { font: inherit; color: inherit; }
+button:focus-visible, input:focus-visible, select:focus-visible, label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app { height: 100%; display: grid; grid-template-rows: auto minmax(200px, 1fr) auto; max-width: 900px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 10px 0; gap: 10px; }
+
+header { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand { font-weight: 700; letter-spacing: -0.01em; font-size: 17px; white-space: nowrap; }
+.brand b { color: var(--accent); font-weight: 700; }
+.clip { flex: 1; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.clip::-webkit-scrollbar { display: none; }
+.chip { font-family: var(--font-mono); font-size: 11px; color: var(--dim); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; white-space: nowrap; }
+.chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.chip.ok { color: var(--ok); }
+.iconbtn { flex: none; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); display: grid; place-items: center; cursor: pointer; }
+.iconbtn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.stage { position: relative; background: #000; overflow: hidden; touch-action: none; min-height: 0; cursor: ew-resize;
+  margin-left: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); margin-right: calc(-1 * max(16px, env(safe-area-inset-right, 0px))); }
+@media (min-width: 700px) { .stage { margin-inline: 0; border-radius: var(--r); } }
+.toast { position: absolute; left: 10px; right: 10px; bottom: 10px; background: rgba(20,20,20,.92); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; pointer-events: none; }
+.chip { flex: none; }
+.chip.name { color: var(--fg); max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+.fr { white-space: nowrap; }
+.stage canvas { position: absolute; pointer-events: none; image-rendering: auto; }
+.guides { position: absolute; pointer-events: none; outline: 1px dashed color-mix(in srgb, var(--accent) 75%, transparent); box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); }
+.stage .badge { position: absolute; left: 10px; top: 10px; font-family: var(--font-mono); font-size: 11px; background: rgba(0,0,0,.6); color: #ddd; padding: 3px 7px; border-radius: 6px; pointer-events: none; }
+.stage .marked { left: auto; right: 8px; top: 8px; font-size: 10px; padding: 2px 6px; background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 20px; color: var(--dim); }
+.empty strong { color: var(--fg); display: block; font-size: 17px; margin-bottom: 6px; }
+
+.transport { display: grid; gap: 8px; padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); min-width: 0; }
+/* landscape phone: picture fills the left, controls stack on the right */
+@media (orientation: landscape) and (max-height: 560px) {
+  .app { max-width: none; grid-template-columns: minmax(0, 1fr) minmax(260px, 34%); grid-template-rows: auto minmax(0, 1fr); column-gap: 12px; }
+  header { grid-column: 1 / -1; }
+  .stage { margin: 0; border-radius: 8px; margin-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
+  .transport { overflow-y: auto; align-content: start; }
+  .tc { font-size: 22px; }
+  .readout { flex-wrap: wrap; }
+}
+.readout { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.tc { font-size: clamp(22px, 6.4vw, 30px); font-weight: 500; letter-spacing: 0.02em; }
+.fr { color: var(--dim); font-size: 12px; text-align: right; }
+
+.strip { position: relative; height: 40px; border-radius: 8px; overflow: hidden; background: var(--panel); border: 1px solid var(--line); touch-action: none; cursor: pointer; }
+.strip canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.strip .ticks, .strip .head { position: absolute; inset: 0; pointer-events: none; }
+.strip .tick { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--accent); opacity: .9; }
+.strip .head i { position: absolute; top: -2px; bottom: -2px; width: 3px; margin-left: -1.5px; background: #fff; box-shadow: 0 0 0 1px #000; border-radius: 2px; }
+
+.jog { position: relative; height: 46px; border-radius: 23px; background: var(--raise); border: 1px solid var(--line); touch-action: none; cursor: ew-resize; overflow: hidden; user-select: none; -webkit-user-select: none; }
+.jog .ribs { position: absolute; inset: 0; background-image: repeating-linear-gradient(90deg, transparent 0 9px, #4a4a4a 9px 11px); mask-image: linear-gradient(90deg, transparent, #000 25%, #000 75%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 25%, #000 75%, transparent); }
+.jog .lbl { position: absolute; inset: 0; display: grid; place-items: center; font-size: 12px; color: var(--dim); letter-spacing: 0.08em; text-transform: uppercase; pointer-events: none; }
+.jog.active { border-color: var(--accent); }
+
+.keys { display: grid; grid-template-columns: 1fr 1.6fr 1fr; gap: 8px; }
+.key { height: 46px; border-radius: var(--r); border: 1px solid var(--line); background: var(--panel); font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; font-family: var(--font-mono); font-size: 14px; }
+.key:active { background: var(--raise); }
+.key.mark { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-family: var(--font-body); font-size: 16px; font-weight: 700; }
+.key.mark.on { background: transparent; color: var(--accent); }
+.key:disabled { opacity: .4; }
+
+.tray { display: flex; gap: 8px; overflow-x: auto; min-height: 58px; padding-bottom: 2px; scrollbar-width: thin; }
+.tray .none { color: var(--dim); font-size: 13px; align-self: center; }
+.still { flex: none; position: relative; width: 84px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); background: var(--panel); cursor: pointer; padding: 0; text-align: left; }
+.still.cur { border-color: var(--accent); }
+.still img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #000; }
+.still span { display: block; font-family: var(--font-mono); font-size: 10px; padding: 3px 5px; color: var(--dim); }
+.still .x { position: absolute; right: 3px; top: 3px; width: 22px; height: 22px; border-radius: 50%; background: rgba(0,0,0,.7); color: #fff; border: 0; display: grid; place-items: center; font-size: 13px; cursor: pointer; }
+
+.bar { display: flex; gap: 8px; }
+.btn { height: 46px; padding: 0 18px; border-radius: var(--r); border: 1px solid var(--line); background: var(--panel); font-weight: 600; cursor: pointer; }
+.btn.primary { flex: 1; background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn.small { height: 38px; padding: 0 12px; font-size: 13px; }
+input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+/* sheets */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
+.sheet { width: 100%; max-width: 620px; max-height: 92%; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-bottom: 0; border-radius: 16px 16px 0 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 16px calc(18px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 16px; }
+.sheet h2 { margin: 0; font-size: 18px; display: flex; justify-content: space-between; align-items: center; }
+.sheet h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 3px; gap: 3px; }
+.seg button { border: 0; background: transparent; border-radius: 7px; padding: 9px 4px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--dim); }
+.seg button[aria-pressed="true"] { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line); }
+.hint { font-size: 13px; color: var(--dim); margin: 8px 0 0; line-height: 1.45; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.switch { position: relative; width: 50px; height: 30px; flex: none; }
+.switch input { position: absolute; inset: 0; opacity: 0; cursor: pointer; margin: 0; }
+.switch span { position: absolute; inset: 0; border-radius: 15px; background: var(--line); transition: background .15s; pointer-events: none; }
+.switch span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span::after { transform: translateX(20px); }
+.preview { width: 100%; background: #000; border-radius: 8px; display: block; }
+.results { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.result { display: grid; gap: 6px; min-width: 0; }
+.result img { width: 100%; border-radius: 6px; background: #000; display: block; }
+.result .meta { font-family: var(--font-mono); font-size: 10px; color: var(--dim); overflow-wrap: anywhere; }
+.status { font-size: 13px; color: var(--dim); min-height: 1.2em; }
+.status.err { color: var(--warn); }
+.progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .15s; }
+dl.facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; margin: 0; font-size: 13px; }
+dl.facts dt { color: var(--dim); }
+dl.facts dd { margin: 0; font-family: var(--font-mono); font-size: 12px; overflow-wrap: anywhere; }
+.caltable { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+.caltable td, .caltable th { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
+.caltable th { color: var(--dim); font-weight: 500; }
+.scroll-x { overflow-x: auto; }
+.suite { flex: none; font: 600 12px var(--font-body); color: var(--dim); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 7px 11px; cursor: pointer; }
+.suite[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="app" id="app">
+  <header>
+    <div class="brand">Frame<b>Pull</b></div>
+    <div class="clip" id="chips"></div>
+    <button class="iconbtn" id="openBtn" aria-label="Open a master">
+      <svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/><path d="M12 12v5M9.5 14.5 12 12l2.5 2.5"/></svg>
+    </button>
+    <button class="iconbtn" id="infoBtn" aria-label="Source and calibration details">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
+    </button>
+    <input type="file" id="file" accept="video/quicktime,video/mp4,.mov,.mp4,.m4v">
+  </header>
+
+  <div class="stage" id="stage">
+    <canvas id="view"></canvas>
+    <div class="guides" id="guides" hidden></div>
+    <div class="toast" id="toast" role="status" hidden></div>
+    <div class="badge marked" id="markedBadge" hidden>MARKED</div>
+    <div class="empty" id="empty"><div><strong>Starting the decoder…</strong>The test chart opens first. Open your own master with the folder button.</div></div>
+  </div>
+
+  <div class="transport">
+    <div class="readout">
+      <div class="tc" id="tc">--:--:--:--</div>
+      <button class="suite" id="suiteBtn" aria-pressed="false" title="Preview as the BT.1886 suite monitor shows it, for checking beside the reference in a dim room. Exports are unaffected.">Suite view</button>
+      <div class="fr" id="fr">frame – / –</div>
+    </div>
+    <div class="strip" id="strip"><canvas id="stripCv"></canvas><div class="ticks" id="ticks"></div><div class="head"><i id="head"></i></div></div>
+    <div class="jog" id="jog"><div class="ribs" id="ribs"></div><div class="lbl">Drag to jog · frame by frame</div></div>
+    <div class="keys">
+      <button class="key" id="prev" aria-label="Back one frame">‹ 1</button>
+      <button class="key mark" id="markBtn">Mark still</button>
+      <button class="key" id="next" aria-label="Forward one frame">1 ›</button>
+    </div>
+    <div class="tray" id="tray"><div class="none">Marked stills appear here.</div></div>
+    <div class="bar">
+      <button class="btn primary" id="exportBtn" disabled>Export stills</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="exportSheet" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="exTitle">
+    <h2><span id="exTitle">Export</span><button class="btn small" id="exClose">Close</button></h2>
+    <div id="exOptions" style="display:grid;gap:16px">
+      <canvas class="preview" id="exPreview" width="640" height="360"></canvas>
+      <div>
+        <h3>Colour</h3>
+        <p class="hint" style="margin-top:0">Code values are kept exactly as graded and labelled sRGB. No tonal or gamut conversion, so phones show it the way a graded frame should look in a normally lit room.</p>
+        <p class="hint" id="suiteNote" hidden>The preview above is in Suite view. Stills still export as code values.</p>
+      </div>
+      <div class="row">
+        <div><h3 style="margin:0">Remove bars</h3><p class="hint" id="cropHint" style="margin-top:4px">Detecting…</p></div>
+        <label class="switch"><input type="checkbox" id="cropToggle" checked aria-label="Remove letterbox and pillarbox bars"><span></span></label>
+      </div>
+      <div>
+        <h3>Format</h3>
+        <div class="seg" id="segFmt">
+          <button data-v="jpg" aria-pressed="true">JPEG · q95, 4:4:4</button>
+          <button data-v="png" aria-pressed="false">PNG · lossless</button>
+        </div>
+        <p class="hint">8-bit at source resolution, dithered from the full-precision decode so Instagram’s recompression doesn’t band clean shadows. JPEG uses quality 95 with no chroma subsampling.</p>
+      </div>
+      <button class="btn primary" id="renderBtn">Render stills</button>
+    </div>
+    <div id="exRun" hidden style="display:grid;gap:12px">
+      <div class="progress"><i id="prog"></i></div>
+      <div class="status" id="exStatus"></div>
+      <div class="bar" id="saveBar" hidden>
+        <button class="btn primary" id="saveAll">Save all to Photos</button>
+      </div>
+      <p class="hint" id="saveHint" hidden><b>Save all to Photos</b> opens the share sheet with every still; choose <b>Save Images</b>. Single stills save from their own button.</p>
+      <div class="results" id="results"></div>
+      <button class="btn" id="exBack" hidden>Change settings</button>
+    </div>
+  </div>
+</div>
+
+<div class="scrim" id="infoSheet" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="infoTitle">
+    <h2><span id="infoTitle">Source</span><button class="btn small" id="infoClose">Close</button></h2>
+    <dl class="facts" id="facts"></dl>
+    <div id="fpsRow" class="row" hidden><span>Frame rate (not found in file)</span>
+      <select id="fpsSel"><option value="24000/1001">23.976</option><option value="24">24</option><option value="25" selected>25</option><option value="30000/1001">29.97</option><option value="30">30</option><option value="50">50</option><option value="60000/1001">59.94</option><option value="60">60</option></select></div>
+    <div class="row"><span>Colour matrix</span>
+      <select id="matrixSel" aria-label="Colour matrix"><option value="auto">From file</option><option value="709">BT.709</option><option value="601">BT.601</option><option value="2020">BT.2020</option></select></div>
+    <div class="row"><span>Video range</span>
+      <select id="rangeSel" aria-label="Video range"><option value="auto">From file</option><option value="legal">Legal (16–235)</option><option value="full">Full (0–255)</option></select></div>
+    <div><div class="bar"><button class="btn small" id="exportCheck">Run colour test</button></div><p class="hint" id="exportCheckOut" style="white-space:pre-line">Decodes the built-in test chart through the real export path (decoder, dither, JPEG and PNG encoders, sRGB tagging), reads the files back and compares them with the known patch values.</p></div>
+    <p class="hint" id="pickHint">Open masters from <b>Files</b> (Choose File). Picking from the Photos library lets iOS convert the clip to H.264 or HEVC before this page sees it.</p>
+    <div>
+      <h3>Decoder</h3>
+      <p class="hint" id="decSummary" style="margin-top:0">Starting…</p>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script id="workerSrc" type="text/plain">
+/*__CORE__*/
+let mod = null, core = null, file = null, lastIdx = -1, fr = null;
+function scanBars(d, w, h) {
+  // strict pass finds the clean bar; a second pass eats the few rows of codec ringing at the picture edge
+  const rowStat = (y, x0, x1) => { let s = 0, m = 0, n = 0; for (let x = x0; x < x1; x += 3) { const i = (y * w + x) * 4, v = Math.max(d[i], d[i + 1], d[i + 2]); s += v; if (v > m) m = v; n++; } return [s / n, m]; };
+  const colStat = (x, y0, y1) => { let s = 0, m = 0, n = 0; for (let y = y0; y < y1; y += 3) { const i = (y * w + x) * 4, v = Math.max(d[i], d[i + 1], d[i + 2]); s += v; if (v > m) m = v; n++; } return [s / n, m]; };
+  const clean = ([mean, max]) => mean <= 1.5 && max <= 24;
+  const edge = (stat, from, dir, limit) => {
+    let e = 0; while (e < limit && clean(stat(from + dir * e))) e++;
+    if (e === 0) return 0;
+    for (let k = 0; k < 8 && e < limit - 5; k++) { const here = stat(from + dir * e)[0], inside = stat(from + dir * (e + 4))[0]; if (here < 0.25 * inside) e++; else break; }
+    return e;
+  };
+  const top = edge(y => rowStat(y, 0, w), 0, 1, h >> 1);
+  if (top >= (h >> 1) - 5) return null;
+  const bottom = edge(y => rowStat(y, 0, w), h - 1, -1, h - top >> 1);
+  const left = edge(x => colStat(x, top, h - bottom), 0, 1, w >> 1);
+  const right = edge(x => colStat(x, top, h - bottom), w - 1, -1, w - left >> 1);
+  return { top, bottom, left, right };
+}
+
+const IDENT = new Uint8Array(4096).map((_, i) => Math.round(i * 255 / 4095));
+const rangeOf = (m, d) => m.range === 'full' ? 1 : m.range === 'legal' ? 0 : (d.range === 2 ? 1 : 0);
+// trust a real tag; untagged: BT.709 at 720 lines and up, BT.601 below (spec)
+const matrixAuto = (cs, h) => cs === 1 ? 0 : (cs === 5 || cs === 6) ? 1 : (cs === 9 || cs === 10) ? 2 : (h >= 720 ? 0 : 1);
+let matrixMode = 'auto';
+const matrixOf = (cs, h) => matrixMode === '709' ? 0 : matrixMode === '601' ? 1 : matrixMode === '2020' ? 2 : matrixAuto(cs, h);
+function decodeAt(idx) { if (idx === lastIdx) return core.lastInfo; const d = core.decode(idx); if (d.error) throw new Error('decode failed (' + d.error + ') at frame ' + idx); lastIdx = idx; core.lastInfo = d; return d; }
+onmessage = e => {
+  const m = e.data;
+  if (m.matrix) matrixMode = m.matrix;
+  try {
+    if (m.type === 'init') { mod = m.module; postMessage({ id: m.id, ok: true }); return; }
+    if (m.type === 'open') {
+      file = m.file; lastIdx = -1; fr = new FileReaderSync();
+      core = createCore(mod, (o, l) => new Uint8Array(fr.readAsArrayBuffer(file.slice(o, Math.min(file.size, o + l)))), null);
+      const info = core.open(file.size);
+      if (!info.error) info.intra = core.intra();
+      postMessage({ id: m.id, info }); return;
+    }
+    if (m.type === 'frame' && m.jpeg) {
+      const d = decodeAt(m.idx);
+      const j = core.renderJpeg(m.x, m.y, m.w, m.h, matrixOf(d.colorspace, d.height), rangeOf(m, d), m.jpeg);
+      postMessage({ id: m.id, idx: m.idx, w: m.w, h: m.h, jpeg: j, dec: d }, [j.buffer]); return;
+    }
+    if (m.type === 'extradata') { const ed = core.extradata(); postMessage({ id: m.id, codec: ed.codec, data: ed.data }); return; }
+    if (m.type === 'packets') { const p = core.packets(m.idx, m.after || 6); postMessage({ id: m.id, packets: p }, p.map(x => x.data.buffer)); return; }
+    if (m.type === 'selftest') {
+      const tf = m.file, tr = new FileReaderSync();
+      const tc = createCore(mod, (o, l) => new Uint8Array(tr.readAsArrayBuffer(tf.slice(o, Math.min(tf.size, o + l)))), null);
+      const ti = tc.open(tf.size); if (ti.error) throw new Error('the test chart wouldn\u2019t open');
+      const d = tc.decode(3); if (d.error) throw new Error('the test chart wouldn\u2019t decode');
+      const mat = matrixAuto(d.colorspace, d.height), full = d.range === 2 ? 1 : 0;      // no overrides: this tests the pipeline
+      const r = tc.render(0, 0, d.width, d.height, 1, mat, full, null);
+      const j = tc.jpeg(r.data, r.w, r.h, 95);
+      postMessage({ id: m.id, w: r.w, h: r.h, data: r.data, jpeg: j }, [r.data.buffer, j.buffer]); return;
+    }
+    if (m.type === 'frame') {
+      const d = decodeAt(m.idx);
+      const r = core.render(m.x, m.y, m.w, m.h, m.step, matrixOf(d.colorspace, d.height), rangeOf(m, d), m.lut || null);
+      if (m.step === 1) core.trim();
+      postMessage({ id: m.id, idx: m.idx, w: r.w, h: r.h, data: r.data, dec: d }, [r.data.buffer]); return;
+    }
+    if (m.type === 'detect') {
+      let acc = null;
+      for (const idx of m.idxs) {
+        const d = decodeAt(idx);
+        const r = core.render(0, 0, d.width, d.height, 1, matrixOf(d.colorspace, d.height), rangeOf(m, d), IDENT);
+        core.trim();
+        const b = scanBars(r.data, r.w, r.h);
+        if (b) acc = acc ? { top: Math.min(acc.top, b.top), bottom: Math.min(acc.bottom, b.bottom), left: Math.min(acc.left, b.left), right: Math.min(acc.right, b.right) } : b;
+      }
+      postMessage({ id: m.id, bars: acc }); return;
+    }
+  } catch (err) { postMessage({ id: m.id, error: String(err && err.message || err) }); }
+};
+</script>
+<script>
+// ---- MOV/MP4 header parser: fps, frame count, codec, colr tags, clap, start timecode ----
+// readSlice(offset, length) -> Promise<ArrayBuffer>; size = file size in bytes
+async function parseMov(readSlice, size) {
+  const fourcc = (dv, o) => String.fromCharCode(dv.getUint8(o), dv.getUint8(o + 1), dv.getUint8(o + 2), dv.getUint8(o + 3));
+  let off = 0, moov = null;
+  while (off + 8 <= size) {
+    const h = new DataView(await readSlice(off, 16));
+    let sz = h.getUint32(0), type = fourcc(h, 4), hdr = 8;
+    if (sz === 1) { sz = h.getUint32(8) * 4294967296 + h.getUint32(12); hdr = 16; }
+    else if (sz === 0) sz = size - off;
+    if (sz < hdr) break;
+    if (type === 'moov') {
+      if (sz > 200e6) throw new Error('moov too large');
+      moov = { dv: new DataView(await readSlice(off, sz)), start: hdr, end: sz };
+      break;
+    }
+    off += sz;
+  }
+  if (!moov) throw new Error('No moov atom (not a QuickTime/MP4 file)');
+  const dv = moov.dv;
+  const kids = (s, e) => { const out = []; let o = s; while (o + 8 <= e) { let sz = dv.getUint32(o); const t = fourcc(dv, o + 4); let h = 8; if (sz === 1) { sz = dv.getUint32(o + 8) * 4294967296 + dv.getUint32(o + 12); h = 16; } else if (sz === 0) sz = e - o; if (sz < 8 || o + sz > e) break; out.push({ type: t, s: o + h, e: o + sz, box: o }); o += sz; } return out; };
+  const find = (list, t) => list.find(b => b.type === t);
+  const path = (box, ...ts) => { let b = box; for (const t of ts) { if (!b) return null; b = find(kids(b.s, b.e), t); } return b; };
+  const res = { tracks: [] };
+  for (const trak of kids(moov.start, moov.end).filter(b => b.type === 'trak')) {
+    const mdia = path(trak, 'mdia'); if (!mdia) continue;
+    const hdlr = path(mdia, 'hdlr'); const handler = hdlr ? fourcc(dv, hdlr.s + 8) : '';
+    const mdhd = path(mdia, 'mdhd'); let timescale = 0, duration = 0;
+    if (mdhd) { const v = dv.getUint8(mdhd.s); if (v === 1) { timescale = dv.getUint32(mdhd.s + 20); duration = dv.getUint32(mdhd.s + 24) * 4294967296 + dv.getUint32(mdhd.s + 28); } else { timescale = dv.getUint32(mdhd.s + 12); duration = dv.getUint32(mdhd.s + 16); } }
+    const stbl = path(mdia, 'minf', 'stbl'); if (!stbl) continue;
+    const sk = kids(stbl.s, stbl.e);
+    const stsd = find(sk, 'stsd'); const entry = stsd ? kids(stsd.s + 8, stsd.e)[0] : null;
+    const tr = { handler, timescale, duration, codec: entry ? entry.type : '' };
+    const stts = find(sk, 'stts');
+    if (stts) { const n = dv.getUint32(stts.s + 4); let frames = 0, delta = 0; for (let i = 0; i < n; i++) { const c = dv.getUint32(stts.s + 8 + i * 8), d = dv.getUint32(stts.s + 12 + i * 8); frames += c; if (!delta) delta = d; } tr.frames = frames; tr.delta = delta; }
+    const stco = find(sk, 'stco'), co64 = find(sk, 'co64');
+    if (stco && dv.getUint32(stco.s + 4)) tr.chunk0 = dv.getUint32(stco.s + 8);
+    else if (co64 && dv.getUint32(co64.s + 4)) tr.chunk0 = dv.getUint32(co64.s + 8) * 4294967296 + dv.getUint32(co64.s + 12);
+    if (entry && handler === 'vide') {
+      const es = entry.s; // after the 8-byte entry header
+      tr.width = dv.getUint16(es + 24); tr.height = dv.getUint16(es + 26);
+      for (const ext of kids(es + 78, entry.e)) {
+        if (ext.type === 'colr') { const ct = fourcc(dv, ext.s); if (ct === 'nclc' || ct === 'nclx') { tr.colr = { primaries: dv.getUint16(ext.s + 4), transfer: dv.getUint16(ext.s + 6), matrix: dv.getUint16(ext.s + 8) }; if (ct === 'nclx') tr.colr.fullRange = !!(dv.getUint8(ext.s + 10) & 0x80); } }
+        if (ext.type === 'clap') { const r = o => dv.getUint32(ext.s + o) / dv.getUint32(ext.s + o + 4); tr.clap = { w: r(0), h: r(8), hOff: dv.getInt32(ext.s + 16) / dv.getUint32(ext.s + 20), vOff: dv.getInt32(ext.s + 24) / dv.getUint32(ext.s + 28) }; }
+        if (ext.type === 'pasp') tr.pasp = [dv.getUint32(ext.s), dv.getUint32(ext.s + 4)];
+      }
+    }
+    if (entry && handler === 'tmcd' && entry.type === 'tmcd') {
+      const es = entry.s; // reserved(6) dref(2) reserved(4) flags(4) timescale(4) frameDur(4) nFrames(1)
+      tr.tcFlags = dv.getUint32(es + 12); tr.tcScale = dv.getUint32(es + 16); tr.tcDur = dv.getUint32(es + 20); tr.tcFps = dv.getUint8(es + 24);
+    }
+    res.tracks.push(tr);
+  }
+  const v = res.tracks.find(t => t.handler === 'vide');
+  if (!v) throw new Error('No video track');
+  Object.assign(res, { codec: v.codec, width: v.width, height: v.height, colr: v.colr, clap: v.clap, pasp: v.pasp, timescale: v.timescale, delta: v.delta, frames: v.frames, fps: v.delta ? v.timescale / v.delta : 0 });
+  const tc = res.tracks.find(t => t.handler === 'tmcd' && t.chunk0 != null && t.tcFps);
+  if (tc && tc.chunk0 + 4 <= size) {
+    res.tcStart = new DataView(await readSlice(tc.chunk0, 4)).getUint32(0);
+    res.tcBase = tc.tcFps; res.tcDrop = !!(tc.tcFlags & 1);
+  }
+  return res;
+}
+// frame count -> "HH:MM:SS:FF" (drop-frame uses ';')
+function framesToTC(n, base, drop) {
+  base = base || 25;
+  if (drop && (base === 30 || base === 60)) {
+    const d = base === 30 ? 2 : 4, per10 = base * 600 - d * 9, per1 = base * 60 - d;
+    const tens = Math.floor(n / per10), rem = n % per10;
+    n += d * 9 * tens + (rem > d ? d * Math.floor((rem - d) / per1) : 0);
+  }
+  const ff = n % base, s = Math.floor(n / base), p = x => String(x).padStart(2, '0');
+  return `${p(Math.floor(s / 3600) % 24)}:${p(Math.floor(s / 60) % 60)}:${p(s % 60)}${drop ? ';' : ':'}${p(ff)}`;
+}
+
+function scanBars(d, w, h) {
+  // strict pass finds the clean bar; a second pass eats the few rows of codec ringing at the picture edge
+  const rowStat = (y, x0, x1) => { let s = 0, m = 0, n = 0; for (let x = x0; x < x1; x += 3) { const i = (y * w + x) * 4, v = Math.max(d[i], d[i + 1], d[i + 2]); s += v; if (v > m) m = v; n++; } return [s / n, m]; };
+  const colStat = (x, y0, y1) => { let s = 0, m = 0, n = 0; for (let y = y0; y < y1; y += 3) { const i = (y * w + x) * 4, v = Math.max(d[i], d[i + 1], d[i + 2]); s += v; if (v > m) m = v; n++; } return [s / n, m]; };
+  const clean = ([mean, max]) => mean <= 1.5 && max <= 24;
+  const edge = (stat, from, dir, limit) => {
+    let e = 0; while (e < limit && clean(stat(from + dir * e))) e++;
+    if (e === 0) return 0;
+    for (let k = 0; k < 8 && e < limit - 5; k++) { const here = stat(from + dir * e)[0], inside = stat(from + dir * (e + 4))[0]; if (here < 0.25 * inside) e++; else break; }
+    return e;
+  };
+  const top = edge(y => rowStat(y, 0, w), 0, 1, h >> 1);
+  if (top >= (h >> 1) - 5) return null;
+  const bottom = edge(y => rowStat(y, 0, w), h - 1, -1, h - top >> 1);
+  const left = edge(x => colStat(x, top, h - bottom), 0, 1, w >> 1);
+  const right = edge(x => colStat(x, top, h - bottom), w - 1, -1, w - left >> 1);
+  return { top, bottom, left, right };
+}
+
+const CHART = {"w": 640, "h": 360, "bar": 46, "patches": [[20, 62, 120, 150, [0, 0, 0]], [142, 62, 242, 150, [26, 26, 26]], [264, 62, 364, 150, [128, 128, 128]], [386, 62, 486, 150, [204, 204, 204]], [508, 62, 608, 150, [255, 255, 255]], [40, 168, 200, 250, [191, 64, 64]], [240, 168, 400, 250, [64, 160, 64]], [440, 168, 600, 250, [64, 64, 191]]]};
+const WASM_B64 = "__WASM_B64__";
+const CHART_B64 = "__CHART_B64__";
+
+const $ = id => document.getElementById(id);
+const view = $('view'), vctx = view.getContext('2d', { colorSpace: 'srgb' });
+
+const state = {
+  src: null,      // {name, size, file, meta, info, num, den, fps, frames, w, h, tcStart, tcBase, tcDrop, isSample}
+  cur: 0, shown: -1,
+  marks: [],      // {f, thumb}
+  crop: null,
+  opts: { crop: true, fmt: 'jpg', suite: false },
+  rendered: [],
+  decoder: { status: 'starting' },
+  rangeMode: 'auto',
+  matrixMode: 'auto',
+  driver: 'wasm',  // 'wasm' = built-in decoder for everything; 'webcodecs' = hardware preview for H.264/HEVC, built-in decoder for stills
+  wcWhy: '',
+};
+try { const o = JSON.parse(localStorage.getItem('framepull.opts3') || 'null'); if (o) Object.assign(state.opts, o); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem('framepull.opts3', JSON.stringify(state.opts)); } catch (e) {} };
+
+const CODECS = { apco: 'ProRes 422 Proxy', apcs: 'ProRes 422 LT', apcn: 'ProRes 422', apch: 'ProRes 422 HQ', ap4h: 'ProRes 4444', ap4x: 'ProRes 4444 XQ', aprn: 'ProRes RAW', aprh: 'ProRes RAW HQ', avc1: 'H.264', hvc1: 'HEVC', hev1: 'HEVC' };
+const PRIM = { 1: 'Rec.709', 5: 'PAL', 6: 'SMPTE-C', 9: 'Rec.2020', 11: 'DCI-P3', 12: 'P3-D65' };
+const TRC = { 1: 'BT.709', 2: 'unspecified', 13: 'sRGB', 14: 'BT.2020', 16: 'PQ', 18: 'HLG' };
+const MAT = { 1: 'BT.709', 5: 'BT.601', 6: 'BT.601', 9: 'BT.2020' };
+
+/* ---------- preview curves (exports never use these: they keep code values) ---------- */
+const VIEWS = {
+  pass: v => v,
+  // BT.1886 (gamma 2.4) decode then sRGB encode, as the suite monitor shows it (spec)
+  suite: v => v > 0.0905 ? 1.055 * v - 0.055 : 12.92 * Math.pow(v, 2.4),
+};
+const lutCache = {};
+function lutFor(view) { return lutCache[view] || (lutCache[view] = Uint8Array.from({ length: 4096 }, (_, i) => Math.max(0, Math.min(255, Math.round(255 * VIEWS[view](i / 4095)))))); }
+const viewLut = () => lutFor(state.opts.suite ? 'suite' : 'pass');
+const matrixFor = s => state.matrixMode === '709' ? 0 : state.matrixMode === '601' ? 1 : state.matrixMode === '2020' ? 2 : (s.info.matrix === 1 ? 0 : (s.info.matrix === 5 || s.info.matrix === 6) ? 1 : (s.info.matrix === 9 || s.info.matrix === 10) ? 2 : (s.h >= 720 ? 0 : 1));
+const fullFor = s => state.rangeMode === 'full' ? 1 : state.rangeMode === 'legal' ? 0 : (s.info.range === 2 ? 1 : 0);
+const MATRIX_NAME = ['BT.709', 'BT.601', 'BT.2020'];
+
+/* ---------- worker + scheduler ---------- */
+let worker = null, workerUrl = null, wasmModule = null, busy = false, viewDirty = false, nextId = 1;
+const pending = new Map(), queue = [], bootQ = [];   // bootQ: init/open sent first after a restart
+const rawPending = new Map();                         // direct requests made while a preview job is running (packets)
+function rawCall(msg) {
+  return new Promise((resolve, reject) => {
+    if (!worker) return reject(new Error('the decoder isn\u2019t running'));
+    const id = nextId++; msg.id = id; msg.range = state.rangeMode; msg.matrix = state.matrixMode;
+    rawPending.set(id, { resolve, reject }); worker.postMessage(msg);
+  });
+}
+let restartTimes = [];
+function call(msg) { return new Promise((resolve, reject) => { queue.push({ msg, resolve, reject }); pumpWorker(); }); }
+function viewStep() {
+  const s = state.src, v = viewRect(), r = $('stage').getBoundingClientRect(), dpr = Math.min(3, window.devicePixelRatio || 1);
+  const need = Math.max(r.width * dpr / v.w, r.height * dpr / v.h);
+  return Math.max(1, Math.floor(1 / Math.min(1, need)));
+}
+const LIMITS = { init: 15000, open: 40000, frame: 12000, exact: 120000, detect: 180000 };
+function pumpWorker() {
+  if (busy || !worker) return;
+  let job = null;
+  if (bootQ.length) job = bootQ.shift();
+  else if (viewDirty && state.src) {
+    viewDirty = false;
+    const s = state.src, idx = state.cur, step = viewStep();
+    job = { view: true, msg: { type: 'frame', idx, step, x: 0, y: 0, w: s.w, h: s.h, lut: viewLut() }, resolve: r => showFrame(r, s), reject: e => decodeError(e) };
+  } else if (queue.length) job = queue.shift();
+  else if (thumbQ.length) { job = thumbQ.shift(); job.thumb = true; }
+  if (!job) return;
+  busy = true;
+  const id = nextId++; job.msg.id = id; pending.set(id, job);
+  if (state.driver === 'webcodecs' && job.msg.type === 'frame' && !job.msg.exact) {
+    job.timer = setTimeout(() => { wcFailed(new Error('it took too long')); onWorkerMsg({ data: { id, error: 'hardware decode timed out' } }); }, 15000);
+    wcJob(job.msg).then(m => onWorkerMsg({ data: { ...m, id } }), e => { wcFailed(e); onWorkerMsg({ data: { id, error: String(e && e.message || e) } }); });
+  } else {
+    job.timer = setTimeout(() => recover('a frame took too long to decode'), LIMITS[job.msg.exact ? 'exact' : job.msg.type] || 12000);
+    job.msg.range = state.rangeMode; job.msg.matrix = state.matrixMode;
+    worker.postMessage(job.msg);
+  }
+}
+function onWorkerMsg(e) {
+  const m = e.data, raw = rawPending.get(m.id);
+  if (raw) { rawPending.delete(m.id); if (m.error) raw.reject(new Error(m.error)); else raw.resolve(m); return; }
+  const job = pending.get(m.id);
+  if (!job) return;                      // stale reply from a worker we already replaced
+  pending.delete(m.id); clearTimeout(job.timer); busy = false;
+  if (m.error) job.reject(new Error(m.error)); else job.resolve(m);
+  pumpWorker();
+}
+function makeWorker() {
+  worker = new Worker(workerUrl);
+  worker.onmessage = onWorkerMsg;
+  worker.onerror = ev => { if (ev.preventDefault) ev.preventDefault(); recover('the decoder stopped' + (ev.message ? ' (' + ev.message + ')' : '')); };
+  worker.onmessageerror = () => recover('the decoder sent a bad reply');
+}
+// The phone can kill or stall the decoder (usually memory). Start a fresh one, reopen the file, carry on.
+function recover(reason) {
+  const now = Date.now(); restartTimes = restartTimes.filter(t => now - t < 60000); restartTimes.push(now);
+  const stalled = [...pending.values()]; pending.clear(); busy = false;
+  rawPending.forEach(r => r.reject(new Error(reason))); rawPending.clear();
+  stalled.forEach(j => clearTimeout(j.timer));
+  try { worker && worker.terminate(); } catch (e) {}
+  worker = null;
+  if (restartTimes.length > 4) {
+    stalled.forEach(j => j.reject(new Error('the decoder keeps stopping')));
+    queue.splice(0).forEach(j => j.reject(new Error('the decoder keeps stopping')));
+    state.decoder = { status: 'error', msg: 'The decoder stopped repeatedly (' + reason + '). This frame size may be too much for this phone’s memory.' };
+    renderDecoder(); toast(state.decoder.msg); return;
+  }
+  for (const j of stalled) {
+    if (j.view) viewDirty = true;
+    else if (j.thumb) {}                                            // drop; strip rebuilds below
+    else if ((j.retries = (j.retries || 0) + 1) <= 1 && j.msg.type !== 'init' && j.msg.type !== 'open') queue.unshift(j);
+    else j.reject(new Error(reason));
+  }
+  makeWorker();
+  bootQ.push({ msg: { type: 'init', module: wasmModule }, resolve: () => {}, reject: () => {} });
+  const s = state.src;
+  if (s) bootQ.push({ msg: { type: 'open', file: s.file }, resolve: () => { viewDirty = true; }, reject: e => toast('Couldn’t reopen the file: ' + e.message) });
+  toast('Decoder restarted (' + reason + ').');
+  if (s && thumbQ.length === 0) setTimeout(buildStrip, 500);
+  pumpWorker();
+}
+async function startDecoder() {
+  try {
+    if (typeof WebAssembly !== 'object') throw new Error('WebAssembly is not available in this view.');
+    const bin = atob(WASM_B64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    wasmModule = await WebAssembly.compile(bytes);
+    workerUrl = URL.createObjectURL(new Blob([$('workerSrc').textContent], { type: 'text/javascript' }));
+    makeWorker();
+    await call({ type: 'init', module: wasmModule });
+    state.decoder = { status: 'ready' };
+  } catch (e) {
+    state.decoder = { status: 'error', msg: String(e && e.message || e) };
+  }
+  renderDecoder();
+}
+
+
+/* ---------- frames ---------- */
+function goTo(f) {
+  if (!state.src) return;
+  f = Math.max(0, Math.min(state.src.frames - 1, Math.round(f)));
+  state.cur = f; renderReadout();
+  viewDirty = true; pumpWorker();
+}
+function viewRect() { const s = state.src, c = state.crop; return state.opts.crop && c && (c.w < s.w || c.h < s.h) ? c : { x: 0, y: 0, w: s.w, h: s.h }; }
+function layoutView() {
+  const s = state.src; if (!s) return;
+  const st = $('stage').getBoundingClientRect(), r = viewRect(), sc = Math.min(st.width / r.w, st.height / r.h);
+  Object.assign(view.style, { width: s.w * sc + 'px', height: s.h * sc + 'px', left: (st.width - r.w * sc) / 2 - r.x * sc + 'px', top: (st.height - r.h * sc) / 2 - r.y * sc + 'px' });
+}
+let thumbWaiters = [];
+function showFrame(r, s) {
+  if (state.src !== s) return;
+  if (view.width !== r.w || view.height !== r.h) { view.width = r.w; view.height = r.h; }
+  vctx.putImageData(new ImageData(r.data, r.w, r.h), 0, 0);
+  state.shown = r.idx; if (r.dec) s.decRange = r.dec.range; layoutView();
+  const ready = thumbWaiters.filter(w => w.f === r.idx); thumbWaiters = thumbWaiters.filter(w => w.f !== r.idx);
+  ready.forEach(w => w.done());
+  if (!$('exportSheet').hidden) drawPreview();
+}
+function decodeError(e) { toast('Couldn\u2019t decode that frame: ' + e.message); }
+let toastT = 0;
+function toast(t) { const el = $('toast'); el.textContent = t; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => el.hidden = true, 4000); }
+
+/* ---------- filmstrip ---------- */
+let thumbQ = [], stripGen = 0;
+function buildStrip() {
+  const s = state.src; if (!s) return;
+  const cv = $('stripCv'), r = cv.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  const ctx = cv.getContext('2d'); ctx.fillStyle = '#202020'; ctx.fillRect(0, 0, cv.width, cv.height);
+  const tw = cv.height * s.w / s.h, n = Math.max(1, Math.ceil(cv.width / tw)), gen = ++stripGen;
+  const step = Math.max(1, Math.floor(s.h / cv.height));
+  thumbQ = [];
+  for (let i = 0; i < n; i++) {
+    const idx = Math.min(s.frames - 1, Math.floor((i + 0.5) / n * s.frames));
+    thumbQ.push({ msg: { type: 'frame', idx, step, x: 0, y: 0, w: s.w, h: s.h, lut: viewLut() },
+      resolve: m => { if (gen !== stripGen) return; const c = document.createElement('canvas'); c.width = m.w; c.height = m.h; c.getContext('2d').putImageData(new ImageData(m.data, m.w, m.h), 0, 0); ctx.drawImage(c, i * tw, 0, tw, cv.height); },
+      reject: () => {} });
+  }
+  pumpWorker();
+}
+
+/* ---------- loading ---------- */
+let chartBlob = null;
+const chartFile = () => new File([chartBlob || (chartBlob = b64ToBlob(CHART_B64, 'video/quicktime'))], 'framepull_chart.mov', { type: 'video/quicktime' });
+function b64ToBlob(b64, type) { const bin = atob(b64), a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return new Blob([a], { type }); }
+async function loadSource(file, isSample) {
+  if (state.decoder.status !== 'ready') { showEmpty('The decoder didn\u2019t start.', state.decoder.msg || ''); return; }
+  showEmpty(isSample ? 'Opening the test chart…' : 'Opening ' + file.name + '…');
+  state.src = null; state.marks = []; state.crop = null; state.shown = -1; thumbQ = [];
+  state.rendered.forEach(r => URL.revokeObjectURL(r.url)); state.rendered = [];
+  renderAll();
+  let meta = null;
+  try { meta = await parseMov((o, l) => file.slice(o, Math.min(file.size, o + l)).arrayBuffer(), file.size); } catch (e) {}
+  let res;
+  try { res = await call({ type: 'open', file }); } catch (e) { showEmpty('Couldn\u2019t open this file.', e.message); return; }
+  let info = res.info;
+  state.driver = 'wasm'; state.wcWhy = '';
+  if (info.error) {
+    const codec = meta && (CODECS[meta.codec] || meta.codec);
+    if (info.error === -4) showEmpty('Frame Pull can\u2019t decode this file' + (codec ? ' (' + codec + ')' : '') + '.', 'It reads ProRes, H.264 and HEVC. If you picked it from Photos, open the master from Files instead.');
+    else showEmpty('Couldn\u2019t read this file.', 'It doesn\u2019t look like a QuickTime or MP4 file (error ' + info.error + ').');
+    return;
+  }
+  let num = info.fpsNum, den = info.fpsDen, fpsKnown = num > 0 && den > 0;
+  if (meta && meta.timescale && meta.delta) { num = meta.timescale; den = meta.delta; fpsKnown = true; }
+  if (!fpsKnown) { const [n, d] = $('fpsSel').value.split('/').map(Number); num = n; den = d || 1; }
+  const g = (a, b) => b ? g(b, a % b) : a, k = g(num, den); num /= k; den /= k;
+  if (!info.frames) info.frames = 1;
+  state.src = { name: file.name, size: file.size, file, meta, info, num, den, fps: num / den, fpsKnown, frames: info.frames, w: info.width, h: info.height,
+    tcStart: meta && meta.tcStart != null ? meta.tcStart : 0, hasTC: !!(meta && meta.tcStart != null), tcBase: meta && meta.tcBase ? meta.tcBase : Math.round(num / den), tcDrop: !!(meta && meta.tcDrop), isSample: !!isSample };
+  if (!info.intra) {
+    // long-GOP: preview through the hardware decoder (raw planes, our own maths); stills stay on the built-in decoder
+    const why = await setupWebCodecs(state.src);
+    if (!why) state.driver = 'webcodecs';
+    else { state.wcWhy = why; toast('Hardware preview isn\u2019t available (' + why + '), so scrubbing uses the built-in decoder and will be slower.'); }
+  }
+  state.cur = 0; hideEmpty(); renderAll(); renderFacts();
+  goTo(0);
+  buildStrip();
+  detectBars();
+}
+function detectBars() {
+  const s = state.src; if (!s) return;
+  state.crop = null; renderCropInfo();
+  const idxs = [...new Set([0.1, 0.3, 0.5, 0.7, 0.9].map(p => Math.floor(p * (s.frames - 1))))];
+  call({ type: 'detect', idxs }).then(m => {
+    if (state.src !== s) return;
+    const acc = m.bars || { top: 0, bottom: 0, left: 0, right: 0 };
+    for (const k in acc) { if (acc[k] < 2) acc[k] = 0; else acc[k] += acc[k] % 2; }
+    state.crop = { ...acc, x: acc.left, y: acc.top, w: s.w - acc.left - acc.right, h: s.h - acc.top - acc.bottom };
+    renderCropInfo(); renderGuides(); layoutView(); viewDirty = true; pumpWorker();
+  }, () => { state.crop = { top: 0, bottom: 0, left: 0, right: 0, x: 0, y: 0, w: s.w, h: s.h }; renderCropInfo(); });
+}
+
+/* ---------- hardware preview for H.264 / HEVC (WebCodecs) ----------
+   The hardware decoder hands back raw Y'CbCr planes; the matrix and range are applied here with the same
+   maths as the built-in decoder. Nothing goes through Safari's video player (Apple's 1.961 path). */
+const wc = { config: null, dec: null, onFrame: null, err: null, buf: null };
+const hex2 = n => n.toString(16).padStart(2, '0').toUpperCase();
+function codecString(ed, tag) {
+  const d = ed.data; if (!d || d.length < 4) return null;
+  if (ed.codec === 1) return 'avc1.' + hex2(d[1]) + hex2(d[2]) + hex2(d[3]);
+  if (ed.codec === 2 && d.length >= 23) {
+    const space = d[1] >> 6, tier = (d[1] >> 5) & 1, prof = d[1] & 31;
+    let compat = ((d[2] << 24) | (d[3] << 16) | (d[4] << 8) | d[5]) >>> 0, rev = 0;
+    for (let i = 0; i < 32; i++) { rev = ((rev << 1) | (compat & 1)) >>> 0; compat >>>= 1; }
+    const cons = [d[6], d[7], d[8], d[9], d[10], d[11]]; while (cons.length && !cons[cons.length - 1]) cons.pop();
+    return (tag === 'hev1' ? 'hev1' : 'hvc1') + '.' + ['', 'A', 'B', 'C'][space] + prof + '.' + rev.toString(16).toUpperCase() + '.' + (tier ? 'H' : 'L') + d[12] + (cons.length ? '.' + cons.map(c => c.toString(16).toUpperCase()).join('.') : '');
+  }
+  return null;
+}
+function wcNewDecoder() {
+  if (wc.dec && wc.dec.state !== 'closed') try { wc.dec.close(); } catch (e) {}
+  wc.err = null;
+  wc.dec = new VideoDecoder({ output: f => { if (wc.onFrame) wc.onFrame(f); else f.close(); }, error: e => { wc.err = e; } });
+  wc.dec.configure(wc.config);
+}
+// returns null when ready, or the reason hardware preview can't be used
+async function setupWebCodecs(s) {
+  if (typeof VideoDecoder === 'undefined' || typeof EncodedVideoChunk === 'undefined') return 'this browser has no WebCodecs';
+  let ed; try { ed = await rawCall({ type: 'extradata' }); } catch (e) { return e.message; }
+  const codec = codecString(ed, s.meta && s.meta.codec);
+  if (!codec) return 'unrecognised codec setup';
+  const config = { codec, description: ed.data, codedWidth: s.w, codedHeight: s.h, optimizeForLatency: true };
+  try { const r = await VideoDecoder.isConfigSupported(config); if (!r.supported) return codec + ' isn’t supported by the hardware decoder'; } catch (e) { return e.message; }
+  wc.config = config; wcNewDecoder();
+  return null;
+}
+async function wcDecode(idx) {   // resolves to a VideoFrame; the caller closes it
+  if (!wc.dec || wc.dec.state === 'closed') wcNewDecoder();
+  const { packets } = await rawCall({ type: 'packets', idx, after: 6 });
+  if (!packets.length || !packets[0].key) throw new Error('no keyframe before this frame');
+  let best = null, bestI = -1;
+  wc.onFrame = f => { const i = Math.round(f.timestamp / 1000); if (i <= idx && i > bestI) { if (best) best.close(); best = f; bestI = i; } else f.close(); };
+  try {
+    for (const p of packets) wc.dec.decode(new EncodedVideoChunk({ type: p.key ? 'key' : 'delta', timestamp: Math.max(0, p.idx < 0 ? p.dts : p.idx) * 1000, data: p.data }));
+    await wc.dec.flush();
+  } catch (e) { wc.onFrame = null; if (best) best.close(); throw wc.err || e; }
+  wc.onFrame = null;
+  if (wc.err) { const e = wc.err; if (best) best.close(); throw e; }
+  if (!best) throw new Error('the hardware decoder returned no frame');
+  return best;
+}
+// [chroma x shift, chroma y shift, 16-bit samples, planes, bit depth]
+const WC_FMT = { I420: [1, 1, 0, 3, 8], I420P10: [1, 1, 1, 3, 10], I420P12: [1, 1, 1, 3, 12], I422: [1, 0, 0, 3, 8], I422P10: [1, 0, 1, 3, 10], I422P12: [1, 0, 1, 3, 12],
+  I444: [0, 0, 0, 3, 8], I444P10: [0, 0, 1, 3, 10], I444P12: [0, 0, 1, 3, 12], NV12: [1, 1, 0, 2, 8] };
+// Same conversion as fp_render in the built-in decoder: bilinear chroma, 4:2:0 chroma between rows, co-sited horizontally.
+async function wcToRGBA(f, m, matrix, full, lut) {
+  const spec = WC_FMT[f.format]; if (!spec) throw new Error('the hardware decoder gave ' + (f.format || 'an unreadable') + ' frames');
+  const size = f.allocationSize(); if (!wc.buf || wc.buf.byteLength < size) wc.buf = new ArrayBuffer(size);
+  const u8 = new Uint8Array(wc.buf, 0, size), layout = await f.copyTo(u8);
+  const [sw, shh, wide, np, depth] = spec, d16 = wide ? new Uint16Array(wc.buf, 0, size >> 1) : null;
+  const FW = f.visibleRect ? f.visibleRect.width : f.displayWidth, FH = f.visibleRect ? f.visibleRect.height : f.displayHeight;
+  const cw = (FW + (1 << sw) - 1) >> sw, ch = (FH + (1 << shh) - 1) >> shh;
+  let Kr = 0.2126, Kb = 0.0722; if (matrix === 1) { Kr = 0.299; Kb = 0.114; } else if (matrix === 2) { Kr = 0.2627; Kb = 0.0593; }
+  const Kg = 1 - Kr - Kb, mx = (1 << depth) - 1, sc = 1 << (depth - 8);
+  const yo = full ? 0 : 16 * sc, yr = full ? mx : 219 * sc, co = 128 * sc, cr = full ? mx : 224 * sc;
+  const crR = 2 * (1 - Kr), cbB = 2 * (1 - Kb), cbG = -2 * (1 - Kb) * Kb / Kg, crG = -2 * (1 - Kr) * Kr / Kg;
+  const P = layout.map(l => wide ? { o: l.offset >> 1, s: l.stride >> 1 } : { o: l.offset, s: l.stride }), A = wide ? d16 : u8;
+  const Yp = P[0], Up = P[1], Vp = np === 3 ? P[2] : P[1], uvStep = np === 2 ? 2 : 1, vOff = np === 2 ? 1 : 0;
+  const x0 = m.x || 0, y0 = m.y || 0, step = m.step, ow = Math.floor(m.w / step), oh = Math.floor(m.h / step), out = new Uint8ClampedArray(ow * oh * 4);
+  for (let oy = 0, o = 0; oy < oh; oy++) {
+    const sy = Math.min(FH - 1, y0 + oy * step);
+    let cyf = shh ? (sy + 0.5) / (1 << shh) - 0.5 : sy; if (cyf < 0) cyf = 0;
+    const cy0 = cyf | 0, cy1 = cy0 + 1 < ch ? cy0 + 1 : cy0, fy = cyf - cy0;
+    const yRow = Yp.o + sy * Yp.s, u0 = Up.o + cy0 * Up.s, u1 = Up.o + cy1 * Up.s, v0 = Vp.o + cy0 * Vp.s + vOff, v1 = Vp.o + cy1 * Vp.s + vOff;
+    for (let ox = 0; ox < ow; ox++) {
+      const sx = Math.min(FW - 1, x0 + ox * step), cxf = sw ? sx / (1 << sw) : sx, cx0 = cxf | 0, cx1 = cx0 + 1 < cw ? cx0 + 1 : cx0, fx = cxf - cx0;
+      const a0 = cx0 * uvStep, a1 = cx1 * uvStep;
+      const u = (A[u0 + a0] * (1 - fx) + A[u0 + a1] * fx) * (1 - fy) + (A[u1 + a0] * (1 - fx) + A[u1 + a1] * fx) * fy;
+      const v = (A[v0 + a0] * (1 - fx) + A[v0 + a1] * fx) * (1 - fy) + (A[v1 + a0] * (1 - fx) + A[v1 + a1] * fx) * fy;
+      const yy = (A[yRow + sx] - yo) / yr, cb = (u - co) / cr, cv = (v - co) / cr;
+      const r = yy + crR * cv, g = yy + cbG * cb + crG * cv, b = yy + cbB * cb;
+      let ri = (r * 4095 + 0.5) | 0, gi = (g * 4095 + 0.5) | 0, bi = (b * 4095 + 0.5) | 0;
+      ri = ri < 0 ? 0 : ri > 4095 ? 4095 : ri; gi = gi < 0 ? 0 : gi > 4095 ? 4095 : gi; bi = bi < 0 ? 0 : bi > 4095 ? 4095 : bi;
+      out[o++] = lut[ri]; out[o++] = lut[gi]; out[o++] = lut[bi]; out[o++] = 255;
+    }
+  }
+  return { w: ow, h: oh, data: out };
+}
+async function wcJob(m) {
+  const s = state.src, f = await wcDecode(m.idx);
+  try { const r = await wcToRGBA(f, m, matrixFor(s), fullFor(s), m.lut); return { idx: m.idx, ...r }; }
+  finally { f.close(); }
+}
+function wcFailed(e) {
+  if (state.driver !== 'webcodecs') return;
+  state.driver = 'wasm'; state.wcWhy = String(e && e.message || e);
+  toast('Hardware preview stopped (' + state.wcWhy + '). Scrubbing now uses the built-in decoder, which is slower.');
+  renderChips(); viewDirty = true; buildStrip(); pumpWorker();
+}
+
+/* ---------- explicit sRGB tagging of exported files ---------- */
+const SRGB_ICC = Uint8Array.from(atob("__ICC_B64__"), c => c.charCodeAt(0));
+const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+const crc32 = (b, s, e) => { let c = 0xffffffff; for (let i = s; i < e; i++) c = CRC_T[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+async function tagSRGB(blob, ext) {
+  const b = new Uint8Array(await blob.arrayBuffer()), parts = [];
+  if (ext === 'png') {
+    // keep the signature and IHDR, drop any iCCP/sRGB/gAMA/cHRM/cICP, add sRGB (perceptual) right after IHDR
+    let o = 8; parts.push(b.subarray(0, 8));
+    while (o < b.length) {
+      const len = ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0, type = String.fromCharCode(b[o + 4], b[o + 5], b[o + 6], b[o + 7]), end = o + 12 + len;
+      if (!['iCCP', 'sRGB', 'gAMA', 'cHRM', 'cICP'].includes(type)) parts.push(b.subarray(o, end));
+      if (type === 'IHDR') { const c = new Uint8Array(13); c.set([0, 0, 0, 1, 0x73, 0x52, 0x47, 0x42, 0]); const crc = crc32(c, 4, 9); c.set([crc >>> 24, (crc >>> 16) & 255, (crc >>> 8) & 255, crc & 255], 9); parts.push(c); }
+      o = end;
+    }
+    return new Blob(parts, { type: 'image/png' });
+  }
+  // JPEG: drop existing ICC APP2 segments, insert an sRGB ICC_PROFILE right after SOI
+  const sig = [73, 67, 67, 95, 80, 82, 79, 70, 73, 76, 69, 0];
+  const app2 = new Uint8Array(4 + 14 + SRGB_ICC.length), L = 2 + 14 + SRGB_ICC.length;
+  app2.set([0xff, 0xe2, L >> 8, L & 255, ...sig, 1, 1]); app2.set(SRGB_ICC, 18);
+  parts.push(b.subarray(0, 2), app2);
+  let o = 2;
+  while (o + 4 <= b.length && b[o] === 0xff && b[o + 1] !== 0xda) {
+    const len = (b[o + 2] << 8) | b[o + 3], end = o + 2 + len;
+    const isIcc = b[o + 1] === 0xe2 && sig.every((v, i) => b[o + 4 + i] === v);
+    if (!isIcc) parts.push(b.subarray(o, end));
+    o = end;
+  }
+  parts.push(b.subarray(o));
+  return new Blob(parts, { type: 'image/jpeg' });
+}
+// Spec acceptance test on the phone: decode the built-in tagged chart through the real export path
+// (decoder, dither, JPEG/PNG encoders, sRGB tagging), read the files back and compare with the known patch values.
+const DIAG = [
+  ['correct', 26, 128, [191, 64, 64]], ['Apple 1.961 path', 28, 139, [198, 73, 73]], ['P3 values labelled sRGB', 26, 128, [177, 74, 69]],
+  ['BT.601 matrix', 26, 128, [180, 50, 65]], ['legal range not expanded', 38, 126, [182, 70, 70]], ['full range expanded as legal', 12, 130, null],
+  ['colorimetric 1886→sRGB', 13, 121, null], ['colorimetric 1886→2.2', 21, 120, null], ['camera-curve ICC baked in', 42, 140, null]];
+function diagnose(g26, g128, red) {
+  let best = null, bd = 1e9;
+  for (const [name, a, b, r] of DIAG) { let dd = Math.abs(g26 - a) + Math.abs(g128 - b); if (r) dd += r.reduce((t, v, k) => t + Math.abs(v - red[k]), 0) / 3; if (dd < bd) { bd = dd; best = name; } }
+  return best;
+}
+function pngColourChunks(b) {
+  const found = []; let o = 8;
+  while (o + 8 <= b.length) { const len = ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0, t = String.fromCharCode(b[o + 4], b[o + 5], b[o + 6], b[o + 7]); if (['gAMA', 'cHRM', 'cICP', 'iCCP', 'sRGB'].includes(t)) found.push(t); if (t === 'IDAT') break; o += 12 + len; }
+  return found;
+}
+function jpegIccDesc(b) {
+  let o = 2;
+  while (o + 4 <= b.length && b[o] === 0xff && b[o + 1] !== 0xda) {
+    const len = (b[o + 2] << 8) | b[o + 3];
+    if (b[o + 1] === 0xe2 && String.fromCharCode(...b.subarray(o + 4, o + 15)) === 'ICC_PROFILE') {
+      const icc = b.subarray(o + 18, o + 2 + len), txt = String.fromCharCode(...icc.subarray(0, Math.min(icc.length, 600))).replace(/[^\x20-\x7e]/g, '');
+      return /sRGB/.test(txt) ? 'sRGB' : 'other';
+    }
+    o += 2 + len;
+  }
+  return 'none';
+}
+async function readPatches(blob) {
+  const bmp = await createImageBitmap(blob), c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height;
+  const x = c.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true }); x.drawImage(bmp, 0, 0);
+  const oy = CHART.h - bmp.height >> 1;   // bars may have been cropped
+  return CHART.patches.map(([x0, y0, x1, y1]) => { const d = x.getImageData(x0 + 10, y0 - oy + 10, x1 - x0 - 20, y1 - y0 - 20).data, s = [0, 0, 0]; for (let i = 0; i < d.length; i += 4) { s[0] += d[i]; s[1] += d[i + 1]; s[2] += d[i + 2]; } return s.map(v => Math.round(v / (d.length / 4))); });
+}
+async function colourTest() {
+  const out = $('exportCheckOut'); out.textContent = 'Testing…';
+  try {
+    const t = await call({ type: 'selftest', file: chartFile() });
+    const cv = document.createElement('canvas'); cv.width = t.w; cv.height = t.h;
+    cv.getContext('2d', { colorSpace: 'srgb' }).putImageData(new ImageData(new Uint8ClampedArray(t.data), t.w, t.h), 0, 0);
+    const png = await tagSRGB(await new Promise(r => cv.toBlob(r, 'image/png')), 'png');
+    const jpg = await tagSRGB(new Blob([t.jpeg], { type: 'image/jpeg' }), 'jpg');
+    const lines = [];
+    for (const [name, blob] of [['JPEG', jpg], ['PNG', png]]) {
+      const got = await readPatches(blob), bytes = new Uint8Array(await blob.arrayBuffer());
+      const err = Math.max(...got.map((g, k) => Math.max(...g.map((v, c) => Math.abs(v - CHART.patches[k][4][c])))));
+      const meta = name === 'JPEG' ? 'ICC ' + jpegIccDesc(bytes) : 'chunks ' + (pngColourChunks(bytes).join('+') || 'none');
+      const metaOk = name === 'JPEG' ? /ICC sRGB/.test(meta) : !/gAMA|cHRM|cICP|iCCP/.test(meta);
+      const g26 = got[1][0], g128 = got[2][0], red = got[5], pass = err <= 2 && metaOk;
+      lines.push(`${name} ${pass ? 'PASS' : 'FAIL'}: 26→${g26}, 128→${g128}, 191,64,64→${red.join(',')} (max error ${err}; ${meta})` + (pass ? '' : ` · looks like: ${diagnose(g26, g128, red)}`));
+    }
+    out.textContent = lines.join('\n');
+  } catch (e) { out.textContent = 'The test couldn’t run: ' + e.message; }
+}
+
+/* ---------- marking ---------- */
+function thumbFromView() {
+  const cv = document.createElement('canvas'), w = 192; cv.width = w; cv.height = Math.round(w * 9 / 16);
+  const ctx = cv.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  const s = Math.min(cv.width / view.width, cv.height / view.height), dw = view.width * s, dh = view.height * s;
+  ctx.drawImage(view, (cv.width - dw) / 2, (cv.height - dh) / 2, dw, dh);
+  return cv.toDataURL('image/jpeg', 0.75);
+}
+function toggleMark() {
+  if (!state.src) return;
+  const f = state.cur, i = state.marks.findIndex(m => m.f === f);
+  if (i >= 0) state.marks.splice(i, 1);
+  else {
+    const m = { f, thumb: '' }; state.marks.push(m); state.marks.sort((a, b) => a.f - b.f);
+    const set = () => { m.thumb = thumbFromView(); renderMarks(); };
+    if (state.shown === f && !viewDirty) set(); else thumbWaiters.push({ f, done: set });
+  }
+  renderMarks(); renderReadout();
+}
+
+/* ---------- export ---------- */
+const tcOf = f => framesToTC(state.src.tcStart + f, state.src.tcBase, state.src.tcDrop);
+const baseName = () => state.src.name.replace(/\.[^.]+$/, '').replace(/[^\w\-]+/g, '_').slice(0, 60) || 'still';
+function outRect() { const s = state.src, c = state.crop; return state.opts.crop && c ? { x: c.x, y: c.y, w: c.w, h: c.h } : { x: 0, y: 0, w: s.w, h: s.h }; }
+function drawPreview() {
+  const cv = $('exPreview'); if (!state.src || !view.width) return;
+  const r = outRect(), k = view.width / state.src.w, W = 640, H = Math.round(W * r.h / r.w);
+  cv.width = W; cv.height = H;
+  cv.getContext('2d').drawImage(view, r.x * k, r.y * k, r.w * k, r.h * k, 0, 0, W, H);
+}
+async function renderStills() {
+  const src = state.src, marks = state.marks.slice(), r = outRect();
+  state.rendered.forEach(x => URL.revokeObjectURL(x.url)); state.rendered = [];
+  $('exOptions').hidden = true; $('exRun').hidden = false; $('results').innerHTML = ''; $('saveBar').hidden = true; $('saveHint').hidden = true; $('exBack').hidden = true;
+  setStatus(''); $('prog').style.width = '0%';
+  if (state.opts.fmt === 'png' && r.w * r.h > 16.7e6) { setStatus('This frame is larger than Safari allows for an image canvas (about 16.7 megapixels), so stills above 4K DCI can\u2019t be saved here.', true); $('exBack').hidden = false; return; }
+  const ext = state.opts.fmt === 'png' ? 'png' : 'jpg', type = ext === 'png' ? 'image/png' : 'image/jpeg';
+  for (let k = 0; k < marks.length; k++) {
+    setStatus(`Rendering ${k + 1} of ${marks.length}…` + (state.src.info.intra ? '' : ' H.264 and HEVC stills take a few seconds each, because each one is decoded from the nearest keyframe.'));
+    let blob = null;
+    try {
+      if (ext === 'jpg') {
+        // decoded, dithered and JPEG-encoded (q95, 4:4:4) inside the built-in decoder; then labelled sRGB
+        const m = await call({ type: 'frame', exact: true, idx: marks[k].f, step: 1, x: r.x, y: r.y, w: r.w, h: r.h, lut: null, jpeg: 95 });
+        blob = await tagSRGB(new Blob([m.jpeg], { type }), ext);
+      } else {
+        const m = await call({ type: 'frame', exact: true, idx: marks[k].f, step: 1, x: r.x, y: r.y, w: r.w, h: r.h, lut: null });
+        const cv = document.createElement('canvas'); cv.width = m.w; cv.height = m.h;
+        cv.getContext('2d', { colorSpace: 'srgb' }).putImageData(new ImageData(m.data, m.w, m.h), 0, 0);
+        blob = await new Promise(res => cv.toBlob(res, type));
+        if (blob) blob = await tagSRGB(blob, ext);
+        cv.width = cv.height = 0;
+      }
+    } catch (e) { setStatus('Rendering failed at ' + tcOf(marks[k].f) + ': ' + e.message, true); break; }
+    if (!blob) { setStatus('Rendering failed at ' + tcOf(marks[k].f) + '. Safari may be short of memory; try fewer stills at once.', true); break; }
+    const name = `${baseName()}_${src.hasTC ? tcOf(marks[k].f).replace(/[:;]/g, '-') : 'F' + marks[k].f}.${ext}`;
+    const item = { name, blob, url: URL.createObjectURL(blob) };
+    state.rendered.push(item); addResult(item);
+    $('prog').style.width = ((k + 1) / marks.length * 100) + '%';
+  }
+  if (state.rendered.length) {
+    setStatus(`${state.rendered.length} still${state.rendered.length > 1 ? 's' : ''} · ${r.w}×${r.h} · code values, sRGB · ${ext === 'jpg' ? 'JPEG q95 4:4:4' : 'PNG'}`);
+    $('saveBar').hidden = false; $('saveHint').hidden = false;
+  }
+  $('exBack').hidden = false;
+}
+function addResult(item) {
+  const d = document.createElement('div'); d.className = 'result';
+  const img = new Image(); img.src = item.url; img.alt = item.name;
+  const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = `${item.name} · ${(item.blob.size / 1048576).toFixed(1)} MB`;
+  const b = document.createElement('button'); b.className = 'btn small'; b.textContent = 'Save';
+  b.onclick = async () => { saveOne(item); };
+  d.append(img, meta, b); $('results').append(d);
+}
+// On the open web Safari's share sheet takes every still at once ("Save N Images" puts them in Photos).
+const asFile = it => new File([it.blob], it.name, { type: it.blob.type || (it.name.endsWith('.png') ? 'image/png' : 'image/jpeg') });
+const canShareFiles = fs => { try { return !!(navigator.canShare && navigator.canShare({ files: fs })); } catch (e) { return false; } };
+function downloadLink(it) { const a = document.createElement('a'); a.href = it.url || URL.createObjectURL(it.blob); a.download = it.name; document.body.append(a); a.click(); a.remove(); }
+// Must be called straight from the tap (no await before navigator.share), or Safari refuses.
+function shareItems(items, label) {
+  const files = items.map(asFile);
+  if (canShareFiles(files)) {
+    navigator.share({ files }).then(() => setStatus(label + ' shared. Choose “Save Images” to put them in Photos.'), e => {
+      if (e && e.name === 'AbortError') setStatus('Cancelled.');
+      else setStatus('Sharing failed: ' + (e && e.message || e) + '. Saving as downloads instead.', true), items.forEach(downloadLink);
+    });
+    return 'shared';
+  }
+  items.forEach(downloadLink); setStatus(label + ' downloaded.'); return 'downloaded';
+}
+function saveOne(item) { shareItems([item], '1 still'); return 'saved'; }
+function saveAll() { if (state.rendered.length) shareItems(state.rendered, state.rendered.length + ' stills'); }
+async function saveZip() {
+  if (!window.JSZip) { setStatus('The ZIP library didn\u2019t load. Save the stills one by one instead.', true); return; }
+  setStatus('Building ZIP…');
+  const zip = new JSZip(); state.rendered.forEach(r => zip.file(r.name, r.blob));
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
+  const r = await saveOne({ name: baseName() + '_stills.zip', blob });
+  if (r === 'saved') setStatus('ZIP saved.');
+}
+function setStatus(t, err) { const s = $('exStatus'); s.textContent = t; s.classList.toggle('err', !!err); }
+
+/* ---------- UI rendering ---------- */
+function showEmpty(title, sub) { const e = $('empty'); e.hidden = false; e.innerHTML = '<div><strong></strong><span></span></div>'; e.querySelector('strong').textContent = title; e.querySelector('span').textContent = sub || ''; view.hidden = true; }
+function hideEmpty() { $('empty').hidden = true; view.hidden = false; }
+function renderReadout() {
+  const s = state.src;
+  $('tc').textContent = s ? tcOf(state.cur) : '--:--:--:--';
+  $('fr').innerHTML = s ? `frame ${state.cur + 1} / ${s.frames}<br>${+s.fps.toFixed(3)} fps` : 'frame – / –';
+  if (s) $('head').style.left = ((state.cur + 0.5) / s.frames * 100) + '%';
+  const marked = !!(s && state.marks.some(m => m.f === state.cur));
+  $('markedBadge').hidden = !marked;
+  $('markBtn').textContent = marked ? 'Unmark' : 'Mark still';
+  $('markBtn').classList.toggle('on', marked);
+  document.querySelectorAll('.still').forEach(el => el.classList.toggle('cur', +el.dataset.f === state.cur));
+}
+function renderMarks() {
+  const t = $('tray'), s = state.src; t.innerHTML = '';
+  if (!state.marks.length) t.innerHTML = '<div class="none">Marked stills appear here.</div>';
+  for (const m of state.marks) {
+    const b = document.createElement('button'); b.className = 'still' + (m.f === state.cur ? ' cur' : ''); b.dataset.f = m.f; b.setAttribute('aria-label', 'Go to ' + tcOf(m.f));
+    b.innerHTML = '<img alt=""><span></span>'; if (m.thumb) b.querySelector('img').src = m.thumb; b.querySelector('span').textContent = tcOf(m.f);
+    b.onclick = () => goTo(m.f);
+    const x = document.createElement('button'); x.className = 'x'; x.textContent = '×'; x.setAttribute('aria-label', 'Remove mark ' + tcOf(m.f));
+    x.onclick = e => { e.stopPropagation(); state.marks = state.marks.filter(k => k.f !== m.f); renderMarks(); renderReadout(); };
+    b.append(x); t.append(b);
+  }
+  $('ticks').innerHTML = s ? state.marks.map(m => `<div class="tick" style="left:${(m.f + 0.5) / s.frames * 100}%"></div>`).join('') : '';
+  const n = state.marks.length;
+  $('exportBtn').disabled = !n; $('exportBtn').textContent = n ? `Export ${n} still${n > 1 ? 's' : ''}` : 'Export stills';
+  ['prev', 'next', 'markBtn'].forEach(id => $(id).disabled = !s);
+}
+function renderChips() {
+  const s = state.src, c = $('chips'); c.innerHTML = '';
+  const add = (t, cls) => { const e = document.createElement('span'); e.className = 'chip' + (cls ? ' ' + cls : ''); e.textContent = t; c.append(e); };
+  if (state.decoder.status === 'error') add('Decoder failed', 'warn');
+  if (s) {
+    if (s.isSample) add('Sample chart', 'ok'); else add(s.name, 'name');
+    const m = s.meta, codec = m && m.codec;
+    add(CODECS[codec] || codec || 'Video');
+    if (state.opts.suite) add('Suite view', 'warn');
+    if (state.matrixMode !== 'auto' || state.rangeMode !== 'auto') add('Override on', 'warn');
+    if (!s.info.intra && state.driver === 'wasm') add('Slow preview', 'warn');
+    add(`${s.w}×${s.h}`);
+    add(`${+s.fps.toFixed(3)}${s.fpsKnown ? '' : '?'} fps`, s.fpsKnown ? '' : 'warn');
+    const i = s.info, is709 = i.primaries === 1 && i.trc === 1 && i.matrix === 1;
+    if (i.primaries === 2 && i.trc === 2 && i.matrix === 2) add('No colour tag (' + MATRIX_NAME[matrixFor(s)].replace('BT.', '') + ' assumed)', 'warn');
+    else add(is709 ? 'Rec.709' : `${PRIM[i.primaries] || i.primaries}/${TRC[i.trc] || i.trc}/${MAT[i.matrix] || i.matrix}`, is709 ? '' : 'warn');
+  }
+}
+function renderGuides() {
+  const g = $('guides'), s = state.src, c = state.crop;
+  g.hidden = true; return;
+  const st = $('stage').getBoundingClientRect(), sc = Math.min(st.width / s.w, st.height / s.h), ox = (st.width - s.w * sc) / 2, oy = (st.height - s.h * sc) / 2;
+  Object.assign(g.style, { left: ox + c.x * sc + 'px', top: oy + c.y * sc + 'px', width: c.w * sc + 'px', height: c.h * sc + 'px' });
+  g.hidden = false;
+}
+function renderCropInfo() {
+  const s = state.src, c = state.crop, h = $('cropHint');
+  if (!s) { h.textContent = ''; return; }
+  if (!c) { h.textContent = 'Detecting bars…'; return; }
+  if (c.w === s.w && c.h === s.h) h.textContent = `No bars found. Stills export at ${s.w}×${s.h}.`;
+  else {
+    const parts = []; if (c.top || c.bottom) parts.push(`${c.top}px top, ${c.bottom}px bottom`); if (c.left || c.right) parts.push(`${c.left}px left, ${c.right}px right`);
+    h.textContent = `Bars: ${parts.join('; ')}. Exports ${c.w}×${c.h} (${(c.w / c.h).toFixed(2)}:1).`;
+  }
+}
+function renderDecoder() {
+  const d = state.decoder, el = $('decSummary');
+  el.textContent = d.status === 'ready'
+    ? 'Stills come from a built-in FFmpeg decoder: Y\u2032CbCr is converted with the file\u2019s own matrix and range, the code values are kept exactly as graded (no tonal or gamut change), dithered to 8-bit and labelled sRGB. ProRes previews use the same decoder; H.264 and HEVC previews use the phone\u2019s hardware decoder with the same maths. Nothing passes through Safari\u2019s video player.'
+    : d.status === 'error' ? 'The decoder couldn\u2019t start: ' + d.msg : 'Starting…';
+  renderChips();
+  if (d.status === 'error' && !state.src) showEmpty('The decoder couldn\u2019t start.', d.msg);
+}
+function renderFacts() {
+  const s = state.src, f = $('facts'); f.innerHTML = '';
+  $('fpsRow').hidden = !(s && !s.fpsKnown);
+  if (!s) { f.innerHTML = '<dt>Source</dt><dd>None loaded</dd>'; return; }
+  const m = s.meta, i = s.info, rows = [
+    ['File', s.isSample ? 'Built-in test chart' : s.name], ['Size', (s.size / 1048576).toFixed(1) + ' MB'],
+    ['Codec', m ? (CODECS[m.codec] || m.codec) : 'ProRes'], ['Picture', `${s.w}×${s.h}`],
+    ['Decoder', state.driver === 'webcodecs' ? 'Preview: hardware decoder (WebCodecs), our matrix and range maths. Stills: built-in decoder.'
+      : 'Built-in decoder for preview and stills' + (state.wcWhy ? ' (hardware preview unavailable: ' + state.wcWhy + ')' : '')],
+    ['Frame rate', `${s.num}/${s.den} = ${+s.fps.toFixed(3)} fps${s.fpsKnown ? '' : ' (assumed)'}`], ['Frames', s.frames],
+    ['Start TC', s.hasTC ? tcOf(0) : 'none in file (counting from 00:00:00:00)'],
+    ['Matrix used', MATRIX_NAME[matrixFor(s)] + (state.matrixMode !== 'auto' ? ' (override)' : i.matrix === 2 ? (s.h >= 720 ? ' (untagged, HD rule)' : ' (untagged, SD rule)') : ' (from tag)')],
+    ['Range used', (fullFor(s) ? 'full' : 'legal') + (state.rangeMode !== 'auto' ? ' (override)' : i.range === 2 ? ' (from tag)' : i.range === 1 ? ' (from tag)' : ' (untagged, legal assumed)')],
+    ['Colour tags', `${i.primaries}-${i.trc}-${i.matrix} · ${PRIM[i.primaries] || '?'} / ${TRC[i.trc] || '?'} / ${MAT[i.matrix] || '?'}`],
+  ];
+  if (i.trc === 16 || i.trc === 18) rows.push(['Note', 'HDR transfer. This tool is built for SDR Rec.709; HDR stills will not be tone-correct.']);
+  else if (i.primaries !== 1 && i.primaries !== 2) rows.push(['Note', 'Not Rec.709 primaries. No gamut conversion is applied, so colours will shift.']);
+  for (const [k, v] of rows) { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; f.append(dt, dd); }
+}
+function renderAll() { renderChips(); renderReadout(); renderMarks(); renderCropInfo(); renderGuides(); }
+
+/* ---------- interaction ---------- */
+$('openBtn').onclick = () => $('file').click();
+$('file').onchange = e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  loadSource(f, false);
+};
+$('prev').onclick = () => goTo(state.cur - 1);
+$('next').onclick = () => goTo(state.cur + 1);
+$('markBtn').onclick = toggleMark;
+(() => {
+  const el = $('strip'); let down = false;
+  const at = e => { const r = el.getBoundingClientRect(); goTo((e.clientX - r.left) / r.width * state.src.frames - 0.5); };
+  el.addEventListener('pointerdown', e => { if (!state.src) return; down = true; el.setPointerCapture(e.pointerId); at(e); });
+  el.addEventListener('pointermove', e => { if (down) at(e); });
+  el.addEventListener('pointerup', () => down = false); el.addEventListener('pointercancel', () => down = false);
+})();
+function jogOn(el, ribs) {
+  let down = false, lastX = 0, lastT = 0, acc = 0, off = 0;
+  el.addEventListener('pointerdown', e => { if (!state.src) return; down = true; lastX = e.clientX; lastT = e.timeStamp; acc = 0; el.setPointerCapture(e.pointerId); $('jog').classList.add('active'); });
+  el.addEventListener('pointermove', e => {
+    if (!down) return;
+    const dx = e.clientX - lastX, dt = Math.max(1, e.timeStamp - lastT), v = Math.abs(dx) / dt;
+    lastX = e.clientX; lastT = e.timeStamp;
+    const gain = v > 1.2 ? 1 + (v - 1.2) * 4 : 1;
+    acc += dx * gain / 10;
+    const step = acc > 0 ? Math.floor(acc) : Math.ceil(acc);
+    if (step) { acc -= step; goTo(state.cur + step); }
+    off += dx; if (ribs) ribs.style.backgroundPosition = off + 'px 0';
+  });
+  const up = () => { down = false; $('jog').classList.remove('active'); };
+  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+}
+jogOn($('jog'), $('ribs'));
+jogOn($('stage'), $('ribs'));
+document.addEventListener('keydown', e => {
+  if (!state.src || !$('exportSheet').hidden || !$('infoSheet').hidden || e.target.tagName === 'SELECT') return;
+  if (e.key === 'ArrowLeft') { goTo(state.cur - (e.shiftKey ? 10 : 1)); e.preventDefault(); }
+  else if (e.key === 'ArrowRight') { goTo(state.cur + (e.shiftKey ? 10 : 1)); e.preventDefault(); }
+  else if (e.key === 'm' || e.key === 'M') toggleMark();
+});
+function segBind(id, key, after) {
+  const seg = $(id);
+  const sync = () => seg.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === state.opts[key])));
+  seg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; state.opts[key] = b.dataset.v; saveOpts(); sync(); after && after(); });
+  sync();
+}
+segBind('segFmt', 'fmt');
+function syncSuite() { $('suiteBtn').setAttribute('aria-pressed', String(state.opts.suite)); $('suiteNote').hidden = !state.opts.suite; }
+$('suiteBtn').onclick = () => { state.opts.suite = !state.opts.suite; saveOpts(); syncSuite(); renderChips(); thumbQ = []; viewDirty = true; pumpWorker(); buildStrip(); };
+syncSuite();
+$('cropToggle').checked = state.opts.crop;
+$('cropToggle').onchange = e => { state.opts.crop = e.target.checked; saveOpts(); renderGuides(); layoutView(); viewDirty = true; pumpWorker(); drawPreview(); };
+$('exportBtn').onclick = () => { $('exportSheet').hidden = false; $('exOptions').hidden = false; $('exRun').hidden = true; renderCropInfo(); drawPreview(); };
+$('exClose').onclick = () => $('exportSheet').hidden = true;
+$('exBack').onclick = () => { $('exOptions').hidden = false; $('exRun').hidden = true; drawPreview(); };
+$('renderBtn').onclick = renderStills;
+$('saveAll').onclick = saveAll;
+$('infoBtn').onclick = () => { renderFacts(); renderDecoder(); $('infoSheet').hidden = false; };
+$('rangeSel').onchange = e => { state.rangeMode = e.target.value; renderChips(); thumbQ = []; viewDirty = true; pumpWorker(); buildStrip(); detectBars(); renderFacts(); };
+$('exportCheck').onclick = colourTest;
+$('matrixSel').onchange = e => { state.matrixMode = e.target.value; thumbQ = []; viewDirty = true; pumpWorker(); buildStrip(); renderFacts(); renderChips(); };
+$('infoClose').onclick = () => $('infoSheet').hidden = true;
+$('fpsSel').onchange = () => { const s = state.src; if (s && !s.fpsKnown) { const [n, d] = $('fpsSel').value.split('/').map(Number); Object.assign(s, { num: n, den: d || 1, fps: n / (d || 1), tcBase: Math.round(n / (d || 1)) }); renderAll(); renderFacts(); } };
+[$('exportSheet'), $('infoSheet')].forEach(s => s.addEventListener('click', e => { if (e.target === s) s.hidden = true; }));
+let rz; window.addEventListener('resize', () => { layoutView(); renderGuides(); clearTimeout(rz); rz = setTimeout(() => { buildStrip(); viewDirty = true; pumpWorker(); }, 250); });
+
+/* ---------- start ---------- */
+(async () => {
+  renderAll();
+
+})();
+(async () => {
+  await startDecoder();
+  if (state.decoder.status === 'ready' && !state.src) loadSource(chartFile(), true);
+})();
+</script>
+
+</body></html>
