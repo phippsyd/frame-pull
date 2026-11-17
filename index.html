@@ -56,6 +56,8 @@ header { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
 .chip.ok { color: var(--ok); }
 .iconbtn { flex: none; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); display: grid; place-items: center; cursor: pointer; }
+.upbtn { flex: none; height: 38px; padding: 0 14px 0 11px; border-radius: 999px; border: 1px solid var(--fg); background: var(--fg); color: var(--bg); font: 700 14px var(--font-body); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.upbtn svg { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .iconbtn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 .stage { position: relative; background: #000; overflow: hidden; touch-action: none; min-height: 0; cursor: ew-resize;
@@ -179,10 +181,10 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
   <header>
     <div class="brand">Frame<b>Pull</b></div>
     <div class="clip" id="chips"></div>
-    <button class="iconbtn" id="openBtn" aria-label="Open a master">
-      <svg viewBox="0 0 24 24"><path d="M3 7h6l2 2h10v10H3z"/><path d="M12 12v5M9.5 14.5 12 12l2.5 2.5"/></svg>
+    <button class="upbtn" id="openBtn">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 15v4h16v-4"/></svg>Upload
     </button>
-    <button class="iconbtn" id="infoBtn" aria-label="Source and settings">
+    <button class="iconbtn" id="infoBtn" aria-label="Source and settings" title="Source and settings">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/></svg>
     </button>
     <input type="file" id="file" accept="video/quicktime,video/mp4,.mov,.mp4,.m4v">
@@ -1165,19 +1167,15 @@ function renderChips() {
   const s = state.src, c = $('chips'); c.innerHTML = '';
   const add = (t, cls) => { const e = document.createElement('span'); e.className = 'chip' + (cls ? ' ' + cls : ''); e.textContent = t; c.append(e); };
   if (state.decoder.status === 'error') add('Decoder failed', 'warn');
-  if (s) {
-    if (s.isSample) add('Sample chart', 'ok'); else add(s.name, 'name');
-    const m = s.meta, codec = m && m.codec;
-    add(CODECS[codec] || codec || 'Video');
-    if (state.opts.suite) add('Previewing as grading monitor', 'warn');
-    if (state.matrixMode !== 'auto' || state.rangeMode !== 'auto') add('Override on', 'warn');
-    if (!s.info.intra && state.driver === 'wasm') add('Slow preview', 'warn');
-    add(`${s.w}×${s.h}`);
-    add(`${+s.fps.toFixed(3)}${s.fpsKnown ? '' : '?'} fps`, s.fpsKnown ? '' : 'warn');
-    const i = s.info, is709 = i.primaries === 1 && i.trc === 1 && i.matrix === 1;
-    if (i.primaries === 2 && i.trc === 2 && i.matrix === 2) add('No colour tag (' + MATRIX_NAME[matrixFor(s)].replace('BT.', '') + ' assumed)', 'warn');
-    else add(is709 ? 'Rec.709' : `${PRIM[i.primaries] || i.primaries}/${TRC[i.trc] || i.trc}/${MAT[i.matrix] || i.matrix}`, is709 ? '' : 'warn');
-  }
+  if (!s) return;
+  if (s.isSample) add('Test chart', 'ok'); else add(s.name, 'name');
+  if (state.opts.suite) add('Previewing as grading monitor', 'warn');
+  if (state.matrixMode !== 'auto' || state.rangeMode !== 'auto') add('Override on', 'warn');
+  if (!s.info.intra && state.driver === 'wasm') add('Slow preview', 'warn');
+  if (!s.fpsKnown) add('Frame rate assumed', 'warn');
+  const i = s.info;
+  if (i.primaries === 2 && i.trc === 2 && i.matrix === 2) add('No colour tag (' + MATRIX_NAME[matrixFor(s)].replace('BT.', '') + ' assumed)', 'warn');
+  else if (!(i.primaries === 1 && (i.trc === 1 || i.trc === 2) && i.matrix === 1)) add(i.trc === 16 || i.trc === 18 ? 'HDR source' : 'Not Rec.709', 'warn');
 }
 function renderGuides() {
   const g = $('guides'), s = state.src, c = state.crop;
