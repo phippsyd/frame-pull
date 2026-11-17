@@ -156,6 +156,8 @@ dl.facts dd { margin: 0; font-family: var(--font-mono); font-size: 12px; overflo
 .tcwrap { display: grid; gap: 2px; min-width: 0; }
 .tcwrap .fr { text-align: left; font-size: 11px; }
 .look { display: grid; justify-items: end; gap: 3px; flex: none; }
+.lookwhy { margin: -2px 0 0; font: 400 11px/1.4 var(--font-body); color: var(--dim); }
+.lookwhy b { font-weight: 600; color: var(--fg); }
 .looklbl { font: 500 10px var(--font-body); color: var(--dim); letter-spacing: 0.08em; text-transform: uppercase; }
 .lookseg { display: flex; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 2px; }
 .lookseg button { border: 0; background: transparent; color: var(--dim); font: 600 12px var(--font-body); padding: 6px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
@@ -197,6 +199,7 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
         </div>
       </div>
     </div>
+    <p class="lookwhy">A grading monitor in a dark room shows the same grade darker than a phone in normal light. Use <b>Grading monitor</b> to compare with the suite; stills always export for phones.</p>
     <div class="strip" id="strip"><canvas id="stripCv"></canvas><div class="ticks" id="ticks"></div><div class="head"><i id="head"></i></div></div>
     <div class="jog" id="jog"><div class="ribs" id="ribs"></div><div class="lbl">Drag to jog · frame by frame</div></div>
     <div class="keys">
