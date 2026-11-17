@@ -81,8 +81,9 @@ header { display: flex; align-items: center; gap: 10px; min-width: 0; }
   .transport { overflow-y: auto; align-content: start; }
   .tc { font-size: 22px; }
   .readout { flex-wrap: wrap; }
+  .look { justify-items: start; }
 }
-.readout { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.readout { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .tc { font-size: clamp(22px, 6.4vw, 30px); font-weight: 500; letter-spacing: 0.02em; }
 .fr { color: var(--dim); font-size: 12px; text-align: right; }
 
@@ -152,8 +153,14 @@ dl.facts dd { margin: 0; font-family: var(--font-mono); font-size: 12px; overflo
 .caltable td, .caltable th { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
 .caltable th { color: var(--dim); font-weight: 500; }
 .scroll-x { overflow-x: auto; }
-.suite { flex: none; font: 600 12px var(--font-body); color: var(--dim); background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 7px 11px; cursor: pointer; }
-.suite[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.tcwrap { display: grid; gap: 2px; min-width: 0; }
+.tcwrap .fr { text-align: left; font-size: 11px; }
+.look { display: grid; justify-items: end; gap: 3px; flex: none; }
+.looklbl { font: 500 10px var(--font-body); color: var(--dim); letter-spacing: 0.08em; text-transform: uppercase; }
+.lookseg { display: flex; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 2px; }
+.lookseg button { border: 0; background: transparent; color: var(--dim); font: 600 12px var(--font-body); padding: 6px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+.lookseg button[aria-pressed="true"] { background: var(--raise); color: var(--fg); }
+#lookMonitor[aria-pressed="true"] { color: var(--accent); }
 select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; font: inherit; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -181,9 +188,14 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
 
   <div class="transport">
     <div class="readout">
-      <div class="tc" id="tc">--:--:--:--</div>
-      <button class="suite" id="suiteBtn" aria-pressed="false" title="Preview as the BT.1886 suite monitor shows it, for checking beside the reference in a dim room. Exports are unaffected.">Suite view</button>
-      <div class="fr" id="fr">frame – / –</div>
+      <div class="tcwrap"><div class="tc" id="tc">--:--:--:--</div><div class="fr" id="fr">frame – / –</div></div>
+      <div class="look" role="group" aria-label="Preview look">
+        <span class="looklbl">Preview as</span>
+        <div class="lookseg">
+          <button id="lookPhone" aria-pressed="true">Phone</button>
+          <button id="lookMonitor" aria-pressed="false">Grading monitor</button>
+        </div>
+      </div>
     </div>
     <div class="strip" id="strip"><canvas id="stripCv"></canvas><div class="ticks" id="ticks"></div><div class="head"><i id="head"></i></div></div>
     <div class="jog" id="jog"><div class="ribs" id="ribs"></div><div class="lbl">Drag to jog · frame by frame</div></div>
@@ -207,7 +219,7 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
       <div>
         <h3>Colour</h3>
         <p class="hint" style="margin-top:0">Code values are kept exactly as graded and labelled sRGB. No tonal or gamut conversion, so phones show it the way a graded frame should look in a normally lit room.</p>
-        <p class="hint" id="suiteNote" hidden>The preview above is in Suite view. Stills still export as code values.</p>
+        <p class="hint" id="suiteNote" hidden>You’re previewing as the grading monitor, so this looks darker than the stills will. Stills always export with the phone look.</p>
       </div>
       <div class="row">
         <div><h3 style="margin:0">Remove bars</h3><p class="hint" id="cropHint" style="margin-top:4px">Detecting…</p></div>
@@ -1028,7 +1040,7 @@ function hideEmpty() { $('empty').hidden = true; view.hidden = false; }
 function renderReadout() {
   const s = state.src;
   $('tc').textContent = s ? tcOf(state.cur) : '--:--:--:--';
-  $('fr').innerHTML = s ? `frame ${state.cur + 1} / ${s.frames}<br>${+s.fps.toFixed(3)} fps` : 'frame – / –';
+  $('fr').textContent = s ? `frame ${state.cur + 1} / ${s.frames} · ${+s.fps.toFixed(3)} fps` : 'frame – / –';
   if (s) $('head').style.left = ((state.cur + 0.5) / s.frames * 100) + '%';
   const marked = !!(s && state.marks.some(m => m.f === state.cur));
   $('markedBadge').hidden = !marked;
@@ -1060,7 +1072,7 @@ function renderChips() {
     if (s.isSample) add('Sample chart', 'ok'); else add(s.name, 'name');
     const m = s.meta, codec = m && m.codec;
     add(CODECS[codec] || codec || 'Video');
-    if (state.opts.suite) add('Suite view', 'warn');
+    if (state.opts.suite) add('Previewing as grading monitor', 'warn');
     if (state.matrixMode !== 'auto' || state.rangeMode !== 'auto') add('Override on', 'warn');
     if (!s.info.intra && state.driver === 'wasm') add('Slow preview', 'warn');
     add(`${s.w}×${s.h}`);
@@ -1166,8 +1178,15 @@ function segBind(id, key, after) {
   sync();
 }
 segBind('segFmt', 'fmt');
-function syncSuite() { $('suiteBtn').setAttribute('aria-pressed', String(state.opts.suite)); $('suiteNote').hidden = !state.opts.suite; }
-$('suiteBtn').onclick = () => { state.opts.suite = !state.opts.suite; saveOpts(); syncSuite(); renderChips(); thumbQ = []; viewDirty = true; pumpWorker(); buildStrip(); };
+function syncSuite() { $('lookPhone').setAttribute('aria-pressed', String(!state.opts.suite)); $('lookMonitor').setAttribute('aria-pressed', String(state.opts.suite)); $('suiteNote').hidden = !state.opts.suite; }
+function setLook(monitor) {
+  if (state.opts.suite === monitor) return;
+  state.opts.suite = monitor; saveOpts(); syncSuite(); renderChips(); thumbQ = []; viewDirty = true; pumpWorker(); buildStrip();
+  toast(monitor ? 'Showing the frame as it looked on the grading monitor in a dark room: darker shadows. Only the preview changes; stills still export with the phone look.'
+                : 'Showing the frame as it will look on phones and Instagram, which is how stills export.');
+}
+$('lookPhone').onclick = () => setLook(false);
+$('lookMonitor').onclick = () => setLook(true);
 syncSuite();
 $('cropToggle').checked = state.opts.crop;
 $('cropToggle').onchange = e => { state.opts.crop = e.target.checked; saveOpts(); renderGuides(); layoutView(); viewDirty = true; pumpWorker(); drawPreview(); };
