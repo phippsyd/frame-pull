@@ -89,12 +89,12 @@ header { display: flex; align-items: center; gap: 10px; min-width: 0; }
   header { grid-column: 1 / -1; }
   .stage { margin: 0; border-radius: 8px; margin-bottom: calc(8px + env(safe-area-inset-bottom, 0px)); }
   .transport { overflow-y: auto; align-content: start; }
-  .tc { font-size: 22px; }
+  .tc { font-size: 16px; }
   .readout { flex-wrap: wrap; }
   .look { justify-items: start; }
 }
 .readout { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-.tc { font-size: clamp(22px, 6.4vw, 30px); font-weight: 500; letter-spacing: 0.02em; }
+.tc { font-size: 16px; font-weight: 500; letter-spacing: 0.02em; }
 .fr { color: var(--dim); font-size: 12px; text-align: right; }
 
 .strip { position: relative; height: 40px; border-radius: 8px; overflow: hidden; background: var(--panel); border: 1px solid var(--line); touch-action: none; cursor: pointer; }
@@ -115,12 +115,12 @@ header { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .key.mark.on { background: transparent; color: var(--accent); }
 .key:disabled { opacity: .4; }
 
-.tray { display: flex; gap: 8px; overflow-x: auto; min-height: 58px; padding-bottom: 2px; scrollbar-width: thin; }
+.tray { display: flex; gap: 10px; overflow-x: auto; min-height: 96px; align-items: flex-start; padding-bottom: 2px; scrollbar-width: thin; }
 .tray .none { color: var(--dim); font-size: 13px; align-self: center; }
-.still { flex: none; position: relative; width: 84px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); background: var(--panel); cursor: pointer; padding: 0; text-align: left; }
+.still { flex: none; position: relative; width: 148px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); background: var(--panel); cursor: pointer; padding: 0; text-align: left; }
 .still.cur { border-color: var(--accent); }
-.still img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #000; }
-.still span { display: block; font-family: var(--font-mono); font-size: 10px; padding: 3px 5px; color: var(--dim); }
+.still img { display: block; width: 100%; height: auto; min-height: 60px; background: #000; }
+.still span { display: block; font-family: var(--font-mono); font-size: 11px; padding: 4px 6px; color: var(--dim); }
 .still .x { position: absolute; right: 3px; top: 3px; width: 22px; height: 22px; border-radius: 50%; background: rgba(0,0,0,.7); color: #fff; border: 0; display: grid; place-items: center; font-size: 13px; cursor: pointer; }
 
 .bar { display: flex; gap: 8px; }
@@ -163,7 +163,7 @@ dl.facts dd { margin: 0; font-family: var(--font-mono); font-size: 12px; overflo
 .caltable td, .caltable th { padding: 3px 4px; text-align: right; border-bottom: 1px solid var(--line); }
 .caltable th { color: var(--dim); font-weight: 500; }
 .scroll-x { overflow-x: auto; }
-.tcwrap { display: grid; gap: 2px; min-width: 0; }
+.tcwrap { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .tcwrap .fr { text-align: left; font-size: 11px; }
 .look { display: grid; justify-items: end; gap: 3px; flex: none; }
 .lookwhy { margin: -2px 0 0; font: 400 11px/1.4 var(--font-body); color: var(--dim); }
@@ -1033,11 +1033,10 @@ async function colourTest() {
 
 /* ---------- marking ---------- */
 function thumbFromView() {
-  const cv = document.createElement('canvas'), w = 192; cv.width = w; cv.height = Math.round(w * 9 / 16);
-  const ctx = cv.getContext('2d'); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
-  const s = Math.min(cv.width / view.width, cv.height / view.height), dw = view.width * s, dh = view.height * s;
-  ctx.drawImage(view, (cv.width - dw) / 2, (cv.height - dh) / 2, dw, dh);
-  return cv.toDataURL('image/jpeg', 0.75);
+  const src = state.src, r = viewRect(), k = view.width / src.w, w = 444, h = Math.max(1, Math.round(w * r.h / r.w));
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  cv.getContext('2d').drawImage(view, r.x * k, r.y * k, r.w * k, r.h * k, 0, 0, w, h);
+  return cv.toDataURL('image/jpeg', 0.8);
 }
 function toggleMark() {
   if (!state.src) return;
