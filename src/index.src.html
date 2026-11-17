@@ -68,6 +68,7 @@ header { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .stage canvas { position: absolute; pointer-events: none; image-rendering: auto; }
 .guides { position: absolute; pointer-events: none; outline: 1px dashed color-mix(in srgb, var(--accent) 75%, transparent); box-shadow: 0 0 0 100vmax rgba(0,0,0,.35); }
 .stage .badge { position: absolute; left: 10px; top: 10px; font-family: var(--font-mono); font-size: 11px; background: rgba(0,0,0,.6); color: #ddd; padding: 3px 7px; border-radius: 6px; pointer-events: none; }
+.stage .zoombadge { left: 8px; top: 8px; border: 0; font-size: 11px; padding: 4px 8px; pointer-events: auto; cursor: pointer; color: #eee; }
 .stage .marked { left: auto; right: 8px; top: 8px; font-size: 10px; padding: 2px 6px; background: var(--accent); color: var(--accent-ink); font-weight: 700; }
 .empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 20px; color: var(--dim); }
 .waiting { position: absolute; inset: 0; z-index: 3; display: grid; place-items: center; text-align: center; padding: 20px; background: color-mix(in srgb, var(--bg) 88%, transparent); }
@@ -199,6 +200,7 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
       <button class="btn small" id="waitHide">Cancel</button>
     </div></div>
     <div class="badge marked" id="markedBadge" hidden>MARKED</div>
+    <button class="badge zoombadge" id="zoomBadge" hidden></button>
     <div class="empty" id="empty"><div><strong>Starting the decoder…</strong>The test chart opens first. Open your own master with the folder button.</div></div>
   </div>
 
@@ -208,7 +210,7 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
 
     </div>
     <div class="strip" id="strip"><canvas id="stripCv"></canvas><div class="ticks" id="ticks"></div><div class="head"><i id="head"></i></div></div>
-    <div class="jog" id="jog"><div class="ribs" id="ribs"></div><div class="lbl">Drag to jog · frame by frame</div></div>
+    <div class="jog" id="jog"><div class="ribs" id="ribs"></div><div class="lbl">Drag to jog · pinch the picture to zoom</div></div>
     <div class="keys">
       <button class="key" id="prev" aria-label="Back one frame">‹ 1</button>
       <button class="key mark" id="markBtn">Mark still</button>
@@ -510,8 +512,7 @@ function rawCall(msg) {
 let restartTimes = [];
 function call(msg) { return new Promise((resolve, reject) => { queue.push({ msg, resolve, reject }); pumpWorker(); }); }
 function viewStep() {
-  const s = state.src, v = viewRect(), r = $('stage').getBoundingClientRect(), dpr = Math.min(3, window.devicePixelRatio || 1);
-  const need = Math.max(r.width * dpr / v.w, r.height * dpr / v.h);
+  const dpr = Math.min(3, window.devicePixelRatio || 1), need = fitScale() * zv.zoom * dpr;   // device pixels per source pixel
   return Math.max(1, Math.floor(1 / Math.min(1, need)));
 }
 const LIMITS = { init: 15000, open: 40000, frame: 12000, exact: 120000, detect: 180000 };
@@ -606,15 +607,16 @@ function goTo(f) {
 function viewRect() { const s = state.src, c = state.crop; return state.opts.crop && c && (c.w < s.w || c.h < s.h) ? c : { x: 0, y: 0, w: s.w, h: s.h }; }
 function layoutView() {
   const s = state.src; if (!s) return;
-  const st = $('stage').getBoundingClientRect(), r = viewRect(), sc = Math.min(st.width / r.w, st.height / r.h);
-  Object.assign(view.style, { width: s.w * sc + 'px', height: s.h * sc + 'px', left: (st.width - r.w * sc) / 2 - r.x * sc + 'px', top: (st.height - r.h * sc) / 2 - r.y * sc + 'px' });
+  clampView();
+  const st = $('stage').getBoundingClientRect(), S = fitScale() * zv.zoom;
+  Object.assign(view.style, { width: s.w * S + 'px', height: s.h * S + 'px', left: st.width / 2 - zv.cx * S + 'px', top: st.height / 2 - zv.cy * S + 'px' });
 }
 let thumbWaiters = [];
 function showFrame(r, s) {
   if (state.src !== s) return;
   if (view.width !== r.w || view.height !== r.h) { view.width = r.w; view.height = r.h; }
   vctx.putImageData(new ImageData(r.data, r.w, r.h), 0, 0);
-  state.shown = r.idx; if (r.dec) s.decRange = r.dec.range; layoutView();
+  state.shown = r.idx; state.shownStep = Math.max(1, Math.round(s.w / r.w)); if (r.dec) s.decRange = r.dec.range; layoutView();
   const ready = thumbWaiters.filter(w => w.f === r.idx); thumbWaiters = thumbWaiters.filter(w => w.f !== r.idx);
   ready.forEach(w => w.done());
   if (!$('exportSheet').hidden) drawPreview();
@@ -622,6 +624,87 @@ function showFrame(r, s) {
 function decodeError(e) { toast('Couldn\u2019t decode that frame: ' + e.message); }
 let toastT = 0;
 function toast(t) { const el = $('toast'); el.textContent = t; el.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => el.hidden = true, 4000); }
+
+/* ---------- zoom and pan on the picture ----------
+   zoom 1 = fit. view.cx/cy = source pixel at the stage centre. Pinch zooms around the fingers; one finger pans
+   when zoomed and jogs when not; double-tap toggles a close-up. Zoom survives frame changes. */
+const zv = { zoom: 1, cx: null, cy: null };
+function fitScale() { const st = $('stage').getBoundingClientRect(), r = viewRect(); return Math.min(st.width / r.w, st.height / r.h); }
+function maxZoom() { return Math.min(16, Math.max(2, 3 / fitScale())); }   // up to ~3 screen points per source pixel
+function clampView() {
+  const st = $('stage').getBoundingClientRect(), r = viewRect(), S = fitScale() * zv.zoom;
+  zv.zoom = Math.min(maxZoom(), Math.max(1, zv.zoom));
+  const fit = (lo, len, span) => len * S <= span ? lo + len / 2 : null;
+  const fx = fit(r.x, r.w, st.width), fy = fit(r.y, r.h, st.height);
+  if (zv.cx == null) zv.cx = r.x + r.w / 2; if (zv.cy == null) zv.cy = r.y + r.h / 2;
+  zv.cx = fx != null ? fx : Math.min(r.x + r.w - st.width / 2 / S, Math.max(r.x + st.width / 2 / S, zv.cx));
+  zv.cy = fy != null ? fy : Math.min(r.y + r.h - st.height / 2 / S, Math.max(r.y + st.height / 2 / S, zv.cy));
+}
+function resetZoom() { zv.zoom = 1; zv.cx = zv.cy = null; layoutView(); renderZoomBadge(); refreshForZoom(); }
+function renderZoomBadge() { const b = $('zoomBadge'); b.hidden = zv.zoom <= 1.01; if (!b.hidden) b.textContent = zv.zoom.toFixed(1) + '× · tap to fit'; }
+let zoomRefreshT = 0;
+function refreshForZoom() { clearTimeout(zoomRefreshT); zoomRefreshT = setTimeout(() => { if (state.src && viewStep() !== state.shownStep) { viewDirty = true; pumpWorker(); } }, 180); }
+function stageGestures() {
+  const el = $('stage'), pts = new Map();
+  let mode = null, last = null, acc = 0, lastT = 0, pinch = null, tap = null, lastTap = null;
+  const local = e => { const r = el.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  const imgAt = p => { const st = el.getBoundingClientRect(), S = fitScale() * zv.zoom; return { x: zv.cx + (p.x - st.width / 2) / S, y: zv.cy + (p.y - st.height / 2) / S }; };
+  el.addEventListener('pointerdown', e => {
+    if (!state.src || e.target.closest('#zoomBadge')) return;
+    el.setPointerCapture(e.pointerId); pts.set(e.pointerId, local(e));
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()], mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      clampView(); pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, z0: zv.zoom, P: imgAt(mid) }; mode = 'pinch'; tap = null;
+      $('jog').classList.remove('active');
+    } else if (pts.size === 1) {
+      mode = zv.zoom > 1.01 ? 'pan' : 'jog'; last = local(e); lastT = e.timeStamp; acc = 0; tap = { p: last, t: e.timeStamp };
+      if (mode === 'jog') $('jog').classList.add('active');
+    }
+  });
+  el.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return;
+    const p = local(e); pts.set(e.pointerId, p);
+    if (tap && Math.hypot(p.x - tap.p.x, p.y - tap.p.y) > 10) tap = null;
+    if (mode === 'pinch' && pts.size >= 2) {
+      const [a, b] = [...pts.values()], mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, st = el.getBoundingClientRect();
+      zv.zoom = Math.min(maxZoom(), Math.max(1, pinch.z0 * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d0));
+      const S = fitScale() * zv.zoom; zv.cx = pinch.P.x - (mid.x - st.width / 2) / S; zv.cy = pinch.P.y - (mid.y - st.height / 2) / S;
+      layoutView(); renderZoomBadge();
+    } else if (mode === 'pan') {
+      const S = fitScale() * zv.zoom; zv.cx -= (p.x - last.x) / S; zv.cy -= (p.y - last.y) / S; last = p; layoutView();
+    } else if (mode === 'jog') {
+      const dx = p.x - last.x, dt = Math.max(1, e.timeStamp - lastT), v = Math.abs(dx) / dt; last = p; lastT = e.timeStamp;
+      acc += dx * (v > 1.2 ? 1 + (v - 1.2) * 4 : 1) / 10;
+      const step = acc > 0 ? Math.floor(acc) : Math.ceil(acc);
+      if (step) { acc -= step; goTo(state.cur + step); }
+    }
+  });
+  const up = e => {
+    if (!pts.has(e.pointerId)) return;
+    pts.delete(e.pointerId);
+    if (pts.size === 0) {
+      $('jog').classList.remove('active');
+      if (mode === 'pinch') refreshForZoom();
+      if (tap && e.type === 'pointerup' && e.timeStamp - tap.t < 300) {
+        if (lastTap && e.timeStamp - lastTap.t < 320 && Math.hypot(tap.p.x - lastTap.p.x, tap.p.y - lastTap.p.y) < 30) {
+          if (zv.zoom > 1.01) resetZoom();
+          else { clampView(); const P = imgAt(tap.p); zv.zoom = Math.min(maxZoom(), 3); zv.cx = P.x; zv.cy = P.y; layoutView(); renderZoomBadge(); refreshForZoom(); }
+          lastTap = null;
+        } else lastTap = { p: tap.p, t: e.timeStamp };
+      }
+      mode = null; tap = null;
+    } else if (mode === 'pinch') { mode = 'wait'; }      // a finger left mid-pinch: don't start jogging until all are up
+  };
+  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  el.addEventListener('wheel', e => {                     // trackpad pinch / ctrl-scroll on desktop
+    if (!state.src || !e.ctrlKey) return; e.preventDefault();
+    clampView(); const P = imgAt(local(e)), st = el.getBoundingClientRect();
+    zv.zoom = Math.min(maxZoom(), Math.max(1, zv.zoom * Math.exp(-e.deltaY / 100)));
+    const S = fitScale() * zv.zoom, p = local(e); zv.cx = P.x - (p.x - st.width / 2) / S; zv.cy = P.y - (p.y - st.height / 2) / S;
+    layoutView(); renderZoomBadge(); refreshForZoom();
+  }, { passive: false });
+  $('zoomBadge').onclick = resetZoom;
+}
 
 /* ---------- filmstrip ---------- */
 let thumbQ = [], stripGen = 0;
@@ -649,7 +732,7 @@ function b64ToBlob(b64, type) { const bin = atob(b64), a = new Uint8Array(bin.le
 async function loadSource(file, isSample) {
   if (state.decoder.status !== 'ready') { showEmpty('The decoder didn\u2019t start.', state.decoder.msg || ''); return; }
   showEmpty(isSample ? 'Opening the test chart…' : 'Opening ' + file.name + '…', isSample ? '' : (file.size / 1e9 >= 1 ? (file.size / 1e9).toFixed(1) + ' GB' : Math.round(file.size / 1e6) + ' MB') + ' \u00b7 reading the header', true);
-  state.src = null; state.marks = []; state.crop = null; state.shown = -1; thumbQ = [];
+  state.src = null; state.marks = []; state.crop = null; state.shown = -1; thumbQ = []; zv.zoom = 1; zv.cx = zv.cy = null; renderZoomBadge();
   state.rendered.forEach(r => URL.revokeObjectURL(r.url)); state.rendered = [];
   renderAll();
   let meta = null;
@@ -691,7 +774,7 @@ function detectBars() {
     const acc = m.bars || { top: 0, bottom: 0, left: 0, right: 0 };
     for (const k in acc) { if (acc[k] < 2) acc[k] = 0; else acc[k] += acc[k] % 2; }
     state.crop = { ...acc, x: acc.left, y: acc.top, w: s.w - acc.left - acc.right, h: s.h - acc.top - acc.bottom };
-    renderCropInfo(); renderGuides(); layoutView(); viewDirty = true; pumpWorker();
+    zv.cx = zv.cy = null; renderCropInfo(); renderGuides(); layoutView(); viewDirty = true; pumpWorker();
   }, () => { state.crop = { top: 0, bottom: 0, left: 0, right: 0, x: 0, y: 0, w: s.w, h: s.h }; renderCropInfo(); });
 }
 
@@ -1120,7 +1203,7 @@ function jogOn(el, ribs) {
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
 }
 jogOn($('jog'), $('ribs'));
-jogOn($('stage'), $('ribs'));
+stageGestures();
 document.addEventListener('keydown', e => {
   if (!state.src || !$('exportSheet').hidden || !$('infoSheet').hidden || e.target.tagName === 'SELECT') return;
   if (e.key === 'ArrowLeft') { goTo(state.cur - (e.shiftKey ? 10 : 1)); e.preventDefault(); }
@@ -1142,7 +1225,7 @@ function setLook(monitor) {
 $('lookMonitor').onchange = e => setLook(e.target.checked);
 syncSuite();
 $('cropToggle').checked = state.opts.crop;
-$('cropToggle').onchange = e => { state.opts.crop = e.target.checked; saveOpts(); renderGuides(); layoutView(); viewDirty = true; pumpWorker(); drawPreview(); };
+$('cropToggle').onchange = e => { state.opts.crop = e.target.checked; saveOpts(); zv.zoom = 1; zv.cx = zv.cy = null; renderZoomBadge(); renderGuides(); layoutView(); viewDirty = true; pumpWorker(); drawPreview(); };
 $('exportBtn').onclick = () => { $('exportSheet').hidden = false; $('exOptions').hidden = false; $('exRun').hidden = true; renderCropInfo(); drawPreview(); };
 $('exClose').onclick = () => $('exportSheet').hidden = true;
 $('exBack').onclick = () => { $('exOptions').hidden = false; $('exRun').hidden = true; drawPreview(); };
