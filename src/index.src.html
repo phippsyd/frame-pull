@@ -37,6 +37,9 @@
 }
 html, body { height: 100%; }
 body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+/* no double-tap zoom: rapid taps on the frame buttons stay taps (pinch zoom still works) */
+html, body, button, .key, .still, .seg, .strip { touch-action: manipulation; }
+button, .key { -webkit-user-select: none; user-select: none; }
 * { box-sizing: border-box; }
 button { font: inherit; color: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible, label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1054,6 +1057,8 @@ $('file').onchange = e => {
   if (!f) return;
   loadSource(f, false);
 };
+// belt and braces for older iOS: swallow the double-tap gesture on controls
+document.addEventListener('dblclick', e => { if (e.target.closest('button, .strip, .jog, .stage')) e.preventDefault(); }, { passive: false });
 $('prev').onclick = () => goTo(state.cur - 1);
 $('next').onclick = () => goTo(state.cur + 1);
 $('markBtn').onclick = toggleMark;
