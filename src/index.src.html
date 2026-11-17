@@ -138,6 +138,7 @@ input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; poin
 .sheet h3 { margin: 0 0 8px; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
 .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 3px; gap: 3px; }
 .seg button { border: 0; background: transparent; border-radius: 7px; padding: 9px 4px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--dim); }
+.seg button small { font-size: 10px; font-weight: 500; opacity: .8; }
 .seg button[aria-pressed="true"] { background: var(--raise); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line); }
 .hint { font-size: 13px; color: var(--dim); margin: 8px 0 0; line-height: 1.45; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -212,11 +213,11 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
 
     </div>
     <div class="strip" id="strip"><canvas id="stripCv"></canvas><div class="ticks" id="ticks"></div><div class="head"><i id="head"></i></div></div>
-    <div class="jog" id="jog"><div class="ribs" id="ribs"></div><div class="lbl">Drag to jog · pinch the picture to zoom</div></div>
+    <div class="jog" id="jog"><div class="ribs" id="ribs"></div><div class="lbl">Jog wheel</div></div>
     <div class="keys">
-      <button class="key" id="prev" aria-label="Back one frame">‹ 1</button>
+      <button class="key" id="prev" aria-label="Back one frame">‹ 1f</button>
       <button class="key mark" id="markBtn">Mark still</button>
-      <button class="key" id="next" aria-label="Forward one frame">1 ›</button>
+      <button class="key" id="next" aria-label="Forward one frame">1f ›</button>
     </div>
     <div class="tray" id="tray"><div class="none">Marked stills appear here.</div></div>
     <div class="bar">
@@ -242,10 +243,11 @@ select { background: var(--bg); color: var(--fg); border: 1px solid var(--line);
       <div>
         <h3>Format</h3>
         <div class="seg" id="segFmt">
-          <button data-v="jpg" aria-pressed="true">JPEG · q95, 4:4:4</button>
-          <button data-v="png" aria-pressed="false">PNG · lossless</button>
+          <button data-v="jpg" aria-pressed="true">JPEG<br><small>8-bit · social</small></button>
+          <button data-v="png" aria-pressed="false">PNG<br><small>8-bit · lossless</small></button>
+          <button data-v="png16" aria-pressed="false">PNG<br><small>16-bit · master</small></button>
         </div>
-        <p class="hint">8-bit at source resolution, dithered from the full-precision decode so Instagram’s recompression doesn’t band clean shadows. JPEG uses quality 95 with no chroma subsampling.</p>
+        <p class="hint" id="fmtHint"></p>
       </div>
       <button class="btn primary" id="renderBtn">Render stills</button>
     </div>
@@ -326,6 +328,11 @@ onmessage = e => {
       const info = core.open(file.size);
       if (!info.error) info.intra = core.intra();
       postMessage({ id: m.id, info }); return;
+    }
+    if (m.type === 'frame' && m.png16) {
+      const d = decodeAt(m.idx);
+      const png = core.png16(m.x, m.y, m.w, m.h, matrixOf(d.colorspace, d.height), rangeOf(m, d));
+      postMessage({ id: m.id, idx: m.idx, w: m.w, h: m.h, png, dec: d }, [png.buffer]); return;
     }
     if (m.type === 'frame' && m.jpeg) {
       const d = decodeAt(m.idx);
@@ -1000,7 +1007,7 @@ async function renderStills() {
   $('exOptions').hidden = true; $('exRun').hidden = false; $('results').innerHTML = ''; $('saveBar').hidden = true; $('saveHint').hidden = true; $('exBack').hidden = true;
   setStatus(''); $('prog').style.width = '0%';
   if (state.opts.fmt === 'png' && r.w * r.h > 16.7e6) { setStatus('This frame is larger than Safari allows for an image canvas (about 16.7 megapixels), so stills above 4K DCI can\u2019t be saved here.', true); $('exBack').hidden = false; return; }
-  const ext = state.opts.fmt === 'png' ? 'png' : 'jpg', type = ext === 'png' ? 'image/png' : 'image/jpeg';
+  const fmt = state.opts.fmt, ext = fmt === 'jpg' ? 'jpg' : 'png', type = ext === 'png' ? 'image/png' : 'image/jpeg';
   for (let k = 0; k < marks.length; k++) {
     setStatus(`Rendering ${k + 1} of ${marks.length}…` + (state.src.info.intra ? '' : ' H.264 and HEVC stills take a few seconds each, because each one is decoded from the nearest keyframe.'));
     let blob = null;
@@ -1009,6 +1016,10 @@ async function renderStills() {
         // decoded, dithered and JPEG-encoded (q95, 4:4:4) inside the built-in decoder; then labelled sRGB
         const m = await call({ type: 'frame', exact: true, idx: marks[k].f, step: 1, x: r.x, y: r.y, w: r.w, h: r.h, lut: null, jpeg: 95 });
         blob = await tagSRGB(new Blob([m.jpeg], { type }), ext);
+      } else if (fmt === 'png16') {
+        // full decode precision, no dither; the built-in encoder writes the sRGB chunk itself
+        const m = await call({ type: 'frame', exact: true, idx: marks[k].f, step: 1, x: r.x, y: r.y, w: r.w, h: r.h, lut: null, png16: true });
+        blob = new Blob([m.png], { type });
       } else {
         const m = await call({ type: 'frame', exact: true, idx: marks[k].f, step: 1, x: r.x, y: r.y, w: r.w, h: r.h, lut: null });
         const cv = document.createElement('canvas'); cv.width = m.w; cv.height = m.h;
@@ -1025,7 +1036,7 @@ async function renderStills() {
     $('prog').style.width = ((k + 1) / marks.length * 100) + '%';
   }
   if (state.rendered.length) {
-    setStatus(`${state.rendered.length} still${state.rendered.length > 1 ? 's' : ''} · ${r.w}×${r.h} · code values, sRGB · ${ext === 'jpg' ? 'JPEG q95 4:4:4' : 'PNG'}`);
+    setStatus(`${state.rendered.length} still${state.rendered.length > 1 ? 's' : ''} · ${r.w}×${r.h} · code values, sRGB · ${fmt === 'jpg' ? 'JPEG q95 4:4:4' : fmt === 'png16' ? '16-bit PNG' : '8-bit PNG'}`);
     $('saveBar').hidden = false; $('saveHint').hidden = false;
   }
   $('exBack').hidden = false;
@@ -1183,6 +1194,16 @@ $('markBtn').onclick = toggleMark;
   el.addEventListener('pointermove', e => { if (down) at(e); });
   el.addEventListener('pointerup', () => down = false); el.addEventListener('pointercancel', () => down = false);
 })();
+// A light tick per frame on the jog wheel. Android: vibrate(). iPhone (iOS 18+): toggling a hidden switch fires the system haptic.
+const haptic = (() => {
+  let lab = null, last = 0;
+  if (!navigator.vibrate) {
+    lab = document.createElement('label'); lab.setAttribute('aria-hidden', 'true');
+    lab.style.cssText = 'position:fixed;left:-200px;top:0;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none';
+    const i = document.createElement('input'); i.type = 'checkbox'; i.setAttribute('switch', ''); i.tabIndex = -1; lab.append(i); document.body.append(lab);
+  }
+  return () => { const t = performance.now(); if (t - last < 35) return; last = t; try { if (navigator.vibrate) navigator.vibrate(5); else lab.click(); } catch (e) {} };
+})();
 function jogOn(el, ribs) {
   let down = false, lastX = 0, lastT = 0, acc = 0, off = 0;
   el.addEventListener('pointerdown', e => { if (!state.src) return; down = true; lastX = e.clientX; lastT = e.timeStamp; acc = 0; el.setPointerCapture(e.pointerId); $('jog').classList.add('active'); });
@@ -1193,7 +1214,7 @@ function jogOn(el, ribs) {
     const gain = v > 1.2 ? 1 + (v - 1.2) * 4 : 1;
     acc += dx * gain / 10;
     const step = acc > 0 ? Math.floor(acc) : Math.ceil(acc);
-    if (step) { acc -= step; goTo(state.cur + step); }
+    if (step) { acc -= step; const before = state.cur; goTo(state.cur + step); if (state.cur !== before) haptic(); }
     off += dx; if (ribs) ribs.style.backgroundPosition = off + 'px 0';
   });
   const up = () => { down = false; $('jog').classList.remove('active'); };
@@ -1213,7 +1234,13 @@ function segBind(id, key, after) {
   seg.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; state.opts[key] = b.dataset.v; saveOpts(); sync(); after && after(); });
   sync();
 }
-segBind('segFmt', 'fmt');
+const FMT_HINT = {
+  jpg: 'For Instagram and socials. 8-bit, dithered from the full-precision decode so recompression doesn\u2019t band clean shadows. Quality 95, no chroma subsampling.',
+  png: '8-bit, dithered, lossless. Bigger files than JPEG for the same picture.',
+  png16: 'For stills that aren\u2019t going to socials: grading, retouching, print. Keeps the full 10- or 12-bit decode exactly, with no dither. Large files (roughly 20\u201380 MB at 4K).',
+};
+const syncFmtHint = () => { $('fmtHint').textContent = FMT_HINT[state.opts.fmt] || ''; };
+segBind('segFmt', 'fmt', syncFmtHint); syncFmtHint();
 function syncSuite() { $('lookMonitor').checked = !!state.opts.suite; $('suiteNote').hidden = !state.opts.suite; }
 function setLook(monitor) {
   if (state.opts.suite === monitor) return;

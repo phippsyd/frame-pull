@@ -215,3 +215,64 @@ EXPORT("fp_jpeg") uint8_t *fp_jpeg(uint8_t *rgba, int w, int h, int quality) {
   info[29] = (int)jlen; return jbuf;
 }
 EXPORT("fp_jpeg_free") void fp_jpeg_free(void) { free(jbuf); jbuf = 0; jlen = jcap = 0; }
+
+/* ---- 16-bit PNG master: full decode precision, no dither, sRGB chunk (spec: no gAMA/cHRM/cICP) ---- */
+static uint32_t crc_tab[256];
+static uint32_t crc_up(uint32_t c, const uint8_t *b, size_t n) {
+  if (!crc_tab[1]) for (uint32_t i = 0; i < 256; i++) { uint32_t k = i; for (int j = 0; j < 8; j++) k = k & 1 ? 0xedb88320u ^ (k >> 1) : k >> 1; crc_tab[i] = k; }
+  c = ~c; for (size_t i = 0; i < n; i++) c = crc_tab[(c ^ b[i]) & 255] ^ (c >> 8); return ~c;
+}
+static uint8_t *pbuf; static size_t plen, pcap;
+static int pput(const void *d, size_t n) {
+  if (plen + n > pcap) { size_t nc = pcap ? pcap : (1 << 22); while (nc < plen + n) nc *= 2; uint8_t *nb = realloc(pbuf, nc); if (!nb) return 0; pbuf = nb; pcap = nc; }
+  memcpy(pbuf + plen, d, n); plen += n; return 1;
+}
+static int pchunk(const char *type, const uint8_t *data, uint32_t n) {
+  uint8_t h[8] = { n >> 24, n >> 16, n >> 8, n, type[0], type[1], type[2], type[3] };
+  uint32_t c = crc_up(0, h + 4, 4); c = crc_up(c, data, n);
+  uint8_t t[4] = { c >> 24, c >> 16, c >> 8, c };
+  return pput(h, 8) && (n ? pput(data, n) : 1) && pput(t, 4);
+}
+EXPORT("fp_png16") uint8_t *fp_png16(int x0, int y0, int w, int h, int matrix, int full) {
+  if (!keep->data[0]) return 0;
+  double Kr = 0.2126, Kb = 0.0722;
+  if (matrix == 1) { Kr = 0.299; Kb = 0.114; } else if (matrix == 2) { Kr = 0.2627; Kb = 0.0593; }
+  double Kg = 1 - Kr - Kb;
+  int depth = info[13], sw = info[14], shh = info[15], wide = depth > 8;
+  int cw = (info[18] + (1 << sw) - 1) >> sw, ch = (info[19] + (1 << shh) - 1) >> shh;
+  double mx = (double)((1 << depth) - 1), sc = (double)(1 << (depth - 8));
+  double yo = full ? 0 : 16 * sc, yr = full ? mx : 219 * sc, co = 128 * sc, cr = full ? mx : 224 * sc;
+  double crR = 2 * (1 - Kr), cbB = 2 * (1 - Kb), cbG = -2 * (1 - Kb) * Kb / Kg, crG = -2 * (1 - Kr) * Kr / Kg;
+  const uint8_t *Y = keep->data[0], *U = keep->data[1], *V = keep->data[2];
+  int l0 = keep->linesize[0], l1 = keep->linesize[1], l2 = keep->linesize[2];
+  size_t stride = (size_t)w * 6 + 1;
+  uint8_t *raw = malloc(stride * h), *row = malloc((size_t)w * 6); if (!raw || !row) { free(raw); free(row); return 0; }
+  for (int oy = 0; oy < h; oy++) {
+    int sy = y0 + oy;
+    double cyf = shh ? (sy + 0.5) / (1 << shh) - 0.5 : sy; if (cyf < 0) cyf = 0;
+    int cy0 = (int)cyf, cy1 = cy0 + 1 < ch ? cy0 + 1 : cy0; double fy = cyf - cy0;
+    for (int ox = 0; ox < w; ox++) {
+      int sx = x0 + ox;
+      double cxf = sw ? (double)sx / (1 << sw) : sx;
+      int cx0 = (int)cxf, cx1 = cx0 + 1 < cw ? cx0 + 1 : cx0; double fx = cxf - cx0;
+      double u = (px(U, l1, cx0, cy0, wide) * (1 - fx) + px(U, l1, cx1, cy0, wide) * fx) * (1 - fy) + (px(U, l1, cx0, cy1, wide) * (1 - fx) + px(U, l1, cx1, cy1, wide) * fx) * fy;
+      double v = (px(V, l2, cx0, cy0, wide) * (1 - fx) + px(V, l2, cx1, cy0, wide) * fx) * (1 - fy) + (px(V, l2, cx0, cy1, wide) * (1 - fx) + px(V, l2, cx1, cy1, wide) * fx) * fy;
+      double yy = (px(Y, l0, sx, sy, wide) - yo) / yr, cb = (u - co) / cr, cv = (v - co) / cr;
+      double c3[3] = { yy + crR * cv, yy + cbG * cb + crG * cv, yy + cbB * cb };
+      for (int k = 0; k < 3; k++) { double t = c3[k] < 0 ? 0 : c3[k] > 1 ? 1 : c3[k]; unsigned q = (unsigned)(t * 65535.0 + 0.5); row[ox * 6 + k * 2] = q >> 8; row[ox * 6 + k * 2 + 1] = q & 255; }
+    }
+    uint8_t *o = raw + oy * stride; o[0] = 1;                    // PNG filter: Sub (6 bytes per pixel)
+    for (size_t i = 0; i < (size_t)w * 6; i++) o[1 + i] = (uint8_t)(row[i] - (i >= 6 ? row[i - 6] : 0));
+  }
+  free(row);
+  int zlen = 0; uint8_t *z = stbi_zlib_compress(raw, (int)(stride * h), &zlen, 5); free(raw);
+  if (!z) return 0;
+  plen = 0;
+  static const uint8_t sig[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+  uint8_t ihdr[13] = { w >> 24, w >> 16, w >> 8, w, h >> 24, h >> 16, h >> 8, h, 16, 2, 0, 0, 0 }, srgb = 0;
+  int ok = pput(sig, 8) && pchunk("IHDR", ihdr, 13) && pchunk("sRGB", &srgb, 1) && pchunk("IDAT", z, zlen) && pchunk("IEND", 0, 0);
+  STBIW_FREE(z);
+  if (!ok) return 0;
+  info[29] = (int)plen; return pbuf;
+}
+EXPORT("fp_png16_free") void fp_png16_free(void) { free(pbuf); pbuf = 0; plen = pcap = 0; }

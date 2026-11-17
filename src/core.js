@@ -55,6 +55,11 @@ function createCore(wasmModule, readSync, log) {
       if (!p) throw new Error('JPEG encode failed');
       const out = new Uint8Array(mem.buffer.slice(p, p + infoArr()[29])); X.fp_jpeg_free(); this.trim(); return out;
     },
+    png16(x, y, w, h, matrix, full) {
+      const p = X.fp_png16(x, y, w, h, matrix, full);
+      if (!p) throw new Error('16-bit PNG encode failed (out of memory?)');
+      const out = new Uint8Array(mem.buffer.slice(p, p + infoArr()[29])); X.fp_png16_free(); return out;
+    },
     jpeg(rgba, w, h, quality) {
       const ip = X.fp_malloc(rgba.length); if (!ip) throw new Error('out of memory');
       u8().set(rgba, ip);
